@@ -1,2 +1,12 @@
 node_modules/
 .angular/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+
+# Angular build output
+frontend/dist/

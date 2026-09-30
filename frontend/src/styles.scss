@@ -1,0 +1,50 @@
+@import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Playfair+Display:ital,wght@0,500;0,600;1,500;1,600&display=swap');
+@import './app/landing-page.scss';
+@import './app/bookstore.scss';
+@import './app/login-page.component.scss';
+
+:root {
+	--action-height: 42px;
+	--action-radius: 3px;
+	--action-font-size: 12px;
+	color-scheme: light;
+	font-family: 'DM Sans', 'Helvetica Neue', sans-serif;
+	color: #243b56;
+	background: #fff;
+	font-synthesis: none;
+	text-rendering: optimizeLegibility;
+	-webkit-font-smoothing: antialiased;
+	-moz-osx-font-smoothing: grayscale;
+	scroll-behavior: smooth;
+}
+
+*,
+*::before,
+*::after {
+	box-sizing: border-box;
+}
+
+body {
+	min-width: 320px;
+	margin: 0;
+}
+
+a:focus-visible {
+	outline: 2px solid #e89078;
+	outline-offset: 4px;
+}
+
+.landing-login,
+.landing-primary,
+.login-submit,
+.bag-trigger,
+.logout-trigger,
+.manager-primary,
+.catalog-create button,
+.editor-cancel,
+.bag-checkout > button,
+.add-button {
+	min-height: var(--action-height);
+	border-radius: var(--action-radius);
+	font-size: var(--action-font-size);
+}

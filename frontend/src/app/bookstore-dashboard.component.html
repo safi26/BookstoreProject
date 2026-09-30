@@ -1,0 +1,247 @@
+<div class="bookstore-shell" id="top">
+  <header class="store-header">
+    <a class="store-brand" routerLink="/store" aria-label="Commonplace Books store">
+      <span class="store-brand-mark" aria-hidden="true">c.</span>
+      <span>COMMONPLACE<small>BOOKS &amp; GOOD COMPANY</small></span>
+    </a>
+    <nav class="store-nav" aria-label="Store navigation">
+      <a href="#books">Shop books</a>
+      <a href="#our-story">Our story</a>
+      <span class="role-chip">{{ signedInRole }}</span>
+      <button class="logout-trigger" type="button" (click)="signOut()">Log out</button>
+      <button *ngIf="!isManager" class="bag-trigger" type="button" (click)="showBag = true" [attr.aria-label]="(isStudent ? 'Cart, ' : 'Shopping bag, ') + bagCount + ' items'">
+        {{ isStudent ? 'Cart' : 'Bag' }} <span class="bag-count">{{ bagCount }}</span>
+      </button>
+    </nav>
+  </header>
+
+  <main>
+    <section class="book-section" id="books" aria-labelledby="books-title">
+      <div class="book-section-heading">
+        <div>
+          <p class="store-kicker"><span></span> Fresh from our shelves</p>
+          <h2 id="books-title">New &amp; noteworthy</h2>
+        </div>
+        <p class="book-section-note">A few good places to start.</p>
+      </div>
+
+      <div class="manager-tools" *ngIf="isManager">
+        <button class="manager-primary" type="button" (click)="openBookEditor()">Add book <span aria-hidden="true">+</span></button>
+        <label class="catalog-filter">
+          <span>Catalog</span>
+          <select name="managerCatalogFilter" [(ngModel)]="selectedCatalog">
+            <option>All catalogs</option>
+            <option *ngFor="let catalog of catalogs">{{ catalog }}</option>
+          </select>
+        </label>
+        <form class="catalog-create" (ngSubmit)="addCatalog()">
+          <label for="new-catalog">Create catalog</label>
+          <input id="new-catalog" name="newCatalogName" [(ngModel)]="newCatalogName" placeholder="Catalog name" required />
+          <button type="submit" [disabled]="!newCatalogName.trim()" aria-label="Create catalog">Create</button>
+        </form>
+      </div>
+
+      <div class="catalog-controls" *ngIf="!isManager">
+        <div class="category-list" aria-label="Filter by category">
+          <button *ngFor="let category of categories" type="button" class="category-button"
+            [class.is-selected]="selectedCategory === category"
+            [attr.aria-pressed]="selectedCategory === category"
+            (click)="selectedCategory = category">{{ category }}</button>
+        </div>
+        <label *ngIf="!isStudent" class="catalog-filter">
+          <span>Catalog</span>
+          <select name="catalogFilter" [(ngModel)]="selectedCatalog">
+            <option>All catalogs</option>
+            <option *ngFor="let catalog of catalogs">{{ catalog }}</option>
+          </select>
+        </label>
+        <label *ngIf="!isStudent" class="book-search">
+          <span aria-hidden="true">⌕</span>
+          <span class="visually-hidden">Search books</span>
+          <input type="search" name="bookSearch" [(ngModel)]="searchTerm" placeholder="Title, author, or subject" />
+        </label>
+      </div>
+
+      <form *ngIf="isStudent" class="item-code-entry" (ngSubmit)="addByItemCode()">
+        <label for="student-item-code">Add by item code</label>
+        <div class="item-code-control">
+          <div class="item-code-input-wrap">
+            <input id="student-item-code" name="itemCodeQuery" [(ngModel)]="itemCodeQuery" placeholder="Enter item code" autocomplete="off"
+              role="combobox" aria-autocomplete="list" aria-controls="item-code-suggestions"
+              [attr.aria-expanded]="matchingItemCodes.length > 0"
+              [attr.aria-activedescendant]="activeItemCodeSuggestionId"
+              (ngModelChange)="onItemCodeQueryChange()"
+              (keydown)="handleItemCodeKeydown($event)" />
+            <div *ngIf="matchingItemCodes.length" id="item-code-suggestions" class="item-code-suggestions" role="listbox" aria-label="Matching item codes">
+              <button *ngFor="let book of matchingItemCodes; let index = index" [id]="'item-code-option-' + book.id" type="button" role="option"
+                [class.is-active]="activeItemCodeIndex === index" [attr.aria-selected]="activeItemCodeIndex === index" (click)="selectItemCode(book)">
+                <strong>{{ book.itemCode }}</strong><span>{{ book.title }}</span>
+              </button>
+            </div>
+          </div>
+          <button class="student-action" type="submit">Add to cart</button>
+        </div>
+        <p *ngIf="itemCodeMessage" class="item-code-message" role="status">{{ itemCodeMessage }}</p>
+      </form>
+
+      <div class="book-grid" *ngIf="filteredBooks.length; else noBooks">
+        <article class="book-item" *ngFor="let book of filteredBooks">
+          <div class="book-cover-wrap">
+            <span class="book-badge" *ngIf="book.badge">{{ book.badge }}</span>
+            <img class="book-cover" [src]="'https://covers.openlibrary.org/b/isbn/' + book.isbn + '-L.jpg'"
+              [alt]="'Cover of ' + book.title" loading="lazy" />
+          </div>
+          <div class="book-info">
+            <p class="book-category">{{ book.category }}</p>
+            <h3>{{ book.title }}</h3>
+            <p class="book-author">{{ book.author }}</p>
+            <p class="book-item-code">Item code: <strong>{{ book.itemCode }}</strong></p>
+              <p class="book-catalog">{{ book.catalog }}</p>
+            <div class="book-buy-row">
+              <strong>{{ book.price | currency:'USD' }}</strong>
+              <button *ngIf="!isManager" type="button" class="add-button" (click)="addToBag(book)"
+                [attr.aria-label]="'Add ' + book.title + (isStudent ? ' to cart' : ' to bag')">{{ isStudent ? 'Add to cart' : 'Add to bag' }} <span aria-hidden="true">+</span></button>
+            </div>
+              <div class="manager-book-actions" *ngIf="isManager">
+                <button type="button" (click)="openBookEditor(book)">Edit</button>
+                <button type="button" (click)="removeBook(book)" [attr.aria-label]="'Remove ' + book.title">Remove</button>
+              </div>
+          </div>
+        </article>
+      </div>
+      <ng-template #noBooks><p class="empty-results">No books found. Try another title or category.</p></ng-template>
+          <p *ngIf="!isManager" class="visually-hidden" role="status" aria-live="polite">{{ bagMessage }}</p>
+    </section>
+
+    <section class="our-story" id="our-story" aria-labelledby="story-title">
+      <p class="store-kicker"><span></span> A small shop with a big stack</p>
+      <h2 id="story-title">We believe there’s a book for <em>every version of you.</em></h2>
+      <p>Our shelves are picked by people who love talking books almost as much as reading them. Tell us what you’re in the mood for, and we’ll point you somewhere good.</p>
+      <a href="#books">Back to the shelves <span aria-hidden="true">↗</span></a>
+    </section>
+  </main>
+
+  <footer class="store-footer">
+    <a class="store-brand" routerLink="/store" aria-label="Commonplace Books store">
+      <span class="store-brand-mark" aria-hidden="true">c.</span>
+      <span>COMMONPLACE<small>BOOKS &amp; GOOD COMPANY</small></span>
+    </a>
+    <p>For the love of the next great read.</p>
+    <a href="#top">Back to top ↑</a>
+  </footer>
+
+  <button *ngIf="showBag && !isManager" class="bag-scrim" type="button" aria-label="Close shopping bag" (click)="showBag = false"></button>
+  <aside *ngIf="showBag && !isManager" class="bag-panel" role="dialog" aria-modal="true" aria-labelledby="bag-title">
+    <div class="bag-heading">
+      <div><p class="store-kicker">Your picks</p><h2 id="bag-title">{{ isStudent ? 'Your cart' : 'The book bag' }} <span>({{ bagCount }})</span></h2></div>
+      <button class="close-bag" type="button" aria-label="Close shopping bag" (click)="showBag = false">×</button>
+    </div>
+    <p *ngIf="bag.length === 0" class="bag-empty">{{ isStudent ? 'Your cart is empty. Add a book to get started.' : 'Your bag is taking a little reading break. Add a book to get started.' }}</p>
+    <div class="bag-items" *ngIf="bag.length">
+      <article class="bag-item" *ngFor="let item of bag">
+        <img [src]="'https://covers.openlibrary.org/b/isbn/' + item.book.isbn + '-S.jpg'" [alt]="'Cover of ' + item.book.title" />
+        <div class="bag-item-info">
+          <h3>{{ item.book.title }}</h3>
+          <p>{{ item.book.author }}</p>
+          <div class="quantity-control">
+            <button type="button" [attr.aria-label]="'Remove one ' + item.book.title + (isStudent ? ' from cart' : ' from bag')" (click)="changeQuantity(item, -1)">−</button>
+            <span>{{ item.quantity }}</span>
+            <button type="button" [attr.aria-label]="'Add one ' + item.book.title + (isStudent ? ' to cart' : ' to bag')" (click)="changeQuantity(item, 1)">+</button>
+          </div>
+          <button class="remove-from-bag" type="button" (click)="removeFromBag(item)">Remove item</button>
+        </div>
+        <strong>{{ item.book.price * item.quantity | currency:'USD' }}</strong>
+      </article>
+    </div>
+    <div class="bag-checkout" *ngIf="bag.length">
+      <div><span>Subtotal</span><strong>{{ bagTotal | currency:'USD' }}</strong></div>
+      <div *ngIf="isStudent" class="payment-method" role="group" aria-label="Payment method">
+        <button type="button" [class.is-selected]="paymentMethod === 'cash'" [attr.aria-pressed]="paymentMethod === 'cash'" (click)="paymentMethod = 'cash'">Cash</button>
+        <button type="button" [class.is-selected]="paymentMethod === 'card'" [attr.aria-pressed]="paymentMethod === 'card'" (click)="paymentMethod = 'card'">Card</button>
+      </div>
+      <div *ngIf="isStudent && paymentMethod === 'cash'" class="cash-payment">
+        <label for="cash-received">Cash received</label>
+        <div class="cash-input-row">
+          <span>$</span>
+          <input id="cash-received" name="cashReceived" type="number" min="0" step="0.01" [(ngModel)]="cashReceived" />
+        </div>
+        <p *ngIf="cashReceived !== null && cashReceived < bagTotal" class="payment-error" role="alert">Amount received must cover the total.</p>
+        <p *ngIf="cashReceived !== null && cashReceived >= bagTotal" class="change-due">Change due <strong>{{ changeDue | currency:'USD' }}</strong></p>
+      </div>
+      <p *ngIf="isStudent && paymentMethod === 'card'" class="card-demo-note">Card checkout is a demo; no card details are collected and no real charge is made.</p>
+      <button *ngIf="isStudent" class="complete-payment" type="button" [disabled]="!canCompleteStudentSale" (click)="completeStudentSale()">
+        {{ paymentMethod === 'cash' ? 'Complete cash payment' : 'Complete card payment' }} <span>{{ bagTotal | currency:'USD' }}</span>
+      </button>
+      <button *ngIf="!isStudent" type="button" (click)="checkout()">Continue to checkout <span aria-hidden="true">↗</span></button>
+      <p *ngIf="checkoutMessage" role="status">{{ checkoutMessage }}</p>
+    </div>
+  </aside>
+
+    <button *ngIf="showBookEditor" class="manager-scrim" type="button" aria-label="Close book editor" (click)="closeBookEditor()"></button>
+    <section *ngIf="showBookEditor" class="manager-dialog" role="dialog" aria-modal="true" aria-labelledby="book-editor-title">
+      <header class="manager-dialog-heading">
+        <div>
+          <p class="store-kicker">Catalog management</p>
+          <h2 id="book-editor-title">{{ editingBookId === null ? 'Add a book' : 'Edit book' }}</h2>
+        </div>
+        <button type="button" class="close-bag" aria-label="Close book editor" (click)="closeBookEditor()">×</button>
+      </header>
+      <form class="book-editor-form" #bookForm="ngForm" (ngSubmit)="saveBook()">
+        <label>Title<input name="title" [(ngModel)]="bookDraft.title" required /></label>
+        <label>Author<input name="author" [(ngModel)]="bookDraft.author" required /></label>
+        <div class="editor-fields-row">
+          <label>Category
+            <select name="category" [(ngModel)]="bookDraft.category" required>
+              <option *ngFor="let category of categories.slice(1)">{{ category }}</option>
+            </select>
+          </label>
+          <label>Catalog
+            <select name="catalog" [(ngModel)]="bookDraft.catalog" required>
+              <option *ngFor="let catalog of catalogs">{{ catalog }}</option>
+            </select>
+          </label>
+        </div>
+        <label>Item code<input name="itemCode" [(ngModel)]="bookDraft.itemCode" required /></label>
+        <div class="editor-fields-row">
+          <label>Price<input name="price" type="number" min="0.01" step="0.01" [(ngModel)]="bookDraft.price" required /></label>
+          <label>ISBN<input name="isbn" inputmode="numeric" [(ngModel)]="bookDraft.isbn" required /></label>
+        </div>
+        <label>Badge <span class="optional-label">Optional</span><input name="badge" [(ngModel)]="bookDraft.badge" /></label>
+        <p *ngIf="editorError" class="payment-error" role="alert">{{ editorError }}</p>
+        <div class="book-editor-actions">
+          <button type="button" class="editor-cancel" (click)="closeBookEditor()">Cancel</button>
+          <button type="submit" class="manager-primary" [disabled]="bookForm.invalid">{{ editingBookId === null ? 'Add book' : 'Save changes' }}</button>
+        </div>
+      </form>
+    </section>
+
+  <button *ngIf="showReceipt" class="receipt-scrim" type="button" aria-label="Close receipt" (click)="closeReceipt()"></button>
+  <section *ngIf="showReceipt && receipt as saleReceipt" class="receipt-dialog" role="dialog" aria-modal="true" aria-labelledby="receipt-title">
+    <header class="receipt-header">
+      <div>
+        <p class="store-kicker">Commonplace Books</p>
+        <h2 id="receipt-title">Thank you for your purchase</h2>
+      </div>
+      <button type="button" class="close-bag" aria-label="Close receipt" (click)="closeReceipt()">×</button>
+    </header>
+    <p class="receipt-meta">Receipt {{ saleReceipt.number }} <span>{{ saleReceipt.issuedAt }}</span></p>
+    <table class="receipt-table">
+      <thead><tr><th>Item</th><th>Qty</th><th>Each</th><th>Total</th></tr></thead>
+      <tbody>
+        <tr *ngFor="let item of saleReceipt.items">
+          <td>{{ item.title }}<small>{{ item.itemCode }}</small></td>
+          <td>{{ item.quantity }}</td>
+          <td>{{ item.unitPrice | currency:'USD' }}</td>
+          <td>{{ item.lineTotal | currency:'USD' }}</td>
+        </tr>
+      </tbody>
+    </table>
+    <dl class="receipt-total">
+      <div><dt>Total paid</dt><dd>{{ saleReceipt.total | currency:'USD' }}</dd></div>
+      <div><dt>Payment</dt><dd>{{ saleReceipt.paymentMethod === 'cash' ? 'Cash' : 'Card (demo)' }}</dd></div>
+      <div *ngIf="saleReceipt.cashReceived !== undefined"><dt>Cash received</dt><dd>{{ saleReceipt.cashReceived | currency:'USD' }}</dd></div>
+      <div *ngIf="saleReceipt.changeDue !== undefined"><dt>Change</dt><dd>{{ saleReceipt.changeDue | currency:'USD' }}</dd></div>
+    </dl>
+    <button class="receipt-done" type="button" (click)="closeReceipt()">Done</button>
+  </section>
+</div>

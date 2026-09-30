@@ -7,6 +7,7 @@ from .views import (
     CartView,
     CartItemCreateView,
     CartItemDetailView,
+    CheckoutView,
 )
 
 
@@ -42,6 +43,12 @@ urlpatterns = [
         "users/<int:user_id>/cart/items/<int:cart_item_id>/",
         CartItemDetailView.as_view(),
         name="cart-item-detail",
+    ),
+
+    path(
+        "users/<int:user_id>/checkout/",
+        CheckoutView.as_view(),
+        name="checkout",
     ),
 ]
 

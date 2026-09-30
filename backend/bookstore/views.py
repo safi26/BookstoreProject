@@ -1,16 +1,22 @@
+from decimal import Decimal, InvalidOperation
+from uuid import uuid4
+
+from django.db import transaction
 from django.contrib.auth import get_user_model
 from django.shortcuts import get_object_or_404
+from django.utils import timezone
 
 from rest_framework import status, viewsets
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from .models import Category, Item, Cart, CartItem
+from .models import Category, Item, Cart, CartItem, Sale, SaleItem
 from .serializers import (
     CategorySerializer,
     ItemSerializer,
     CartSerializer,
     CartItemSerializer,
+    SaleReceiptSerializer,
 )
 
 
@@ -224,3 +230,111 @@ class CartItemDetailView(APIView):
         return Response(
             status=status.HTTP_204_NO_CONTENT,
         )
+
+
+class CheckoutView(APIView):
+
+    def post(self, request, user_id):
+        user = get_object_or_404(User, id=user_id)
+        payment_method = request.data.get("payment_method")
+        if payment_method not in {"cash", "card"}:
+            return Response(
+                {"error": "payment_method must be cash or card."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        cash_received = None
+        if payment_method == "cash":
+            try:
+                cash_received = Decimal(str(request.data.get("cash_received", "")))
+            except (InvalidOperation, TypeError, ValueError):
+                return Response(
+                    {"error": "Enter a valid cash amount."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            if (
+                not cash_received.is_finite()
+                or cash_received < 0
+                or cash_received > Decimal("99999999.99")
+            ):
+                return Response(
+                    {"error": "Enter a valid non-negative cash amount."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            cash_received = cash_received.quantize(Decimal("0.01"))
+
+        with transaction.atomic():
+            cart = Cart.objects.select_for_update().filter(user=user).first()
+            if cart is None:
+                return Response(
+                    {"error": "Your cart is empty."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            cart_items = list(
+                CartItem.objects
+                .select_for_update()
+                .filter(cart=cart)
+                .select_related("item")
+            )
+            if not cart_items:
+                return Response(
+                    {"error": "Your cart is empty."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            locked_items = {
+                item.pk: item
+                for item in Item.objects.select_for_update().filter(
+                    pk__in=[cart_item.item_id for cart_item in cart_items]
+                )
+            }
+            for cart_item in cart_items:
+                item = locked_items[cart_item.item_id]
+                if item.item_quantity < cart_item.quantity:
+                    return Response(
+                        {"error": f"Not enough stock for {item.item}."},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+
+            total = sum(
+                (locked_items[cart_item.item_id].item_price * cart_item.quantity
+                 for cart_item in cart_items),
+                Decimal("0.00"),
+            ).quantize(Decimal("0.01"))
+            if payment_method == "cash" and cash_received < total:
+                return Response(
+                    {"error": "Cash received must cover the cart total."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            sale = Sale.objects.create(
+                user=user,
+                receipt_number=(
+                    f"CP-{timezone.now():%Y%m%d}-{uuid4().hex[:6].upper()}"
+                ),
+                payment_method=payment_method,
+                total=total,
+                cash_received=cash_received,
+                change_due=(cash_received - total if cash_received is not None else Decimal("0.00")),
+            )
+
+            for cart_item in cart_items:
+                item = locked_items[cart_item.item_id]
+                line_total = (item.item_price * cart_item.quantity).quantize(Decimal("0.01"))
+                SaleItem.objects.create(
+                    sale=sale,
+                    item=item,
+                    item_name=item.item,
+                    item_code=item.item_code,
+                    quantity=cart_item.quantity,
+                    unit_price=item.item_price,
+                    line_total=line_total,
+                )
+                item.item_quantity -= cart_item.quantity
+                item.save(update_fields=["item_quantity"])
+
+            cart.cart_items.all().delete()
+            serializer = SaleReceiptSerializer(sale)
+
+        return Response(serializer.data, status=status.HTTP_201_CREATED)

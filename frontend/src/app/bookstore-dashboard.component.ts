@@ -1,28 +1,34 @@
 import { CommonModule } from '@angular/common';
+import { HttpErrorResponse } from '@angular/common/http';
 import { Component, inject } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { Router, RouterLink } from '@angular/router';
+import { forkJoin } from 'rxjs';
 import { AuthService } from './auth.service';
+import { ApiCartItem, ApiItem, ApiSaleReceipt, CheckoutPayload, ItemPayload, StoreApiService } from './store-api.service';
 
 interface Book {
   id: number;
   title: string;
   author: string;
   category: string;
-  catalog: string;
+  categoryId: number;
   itemCode: string;
   price: number;
+  quantity: number;
   isbn: string;
-  badge?: string;
+  coverUrl: string;
+  coverFailed: boolean;
+  badge: string;
 }
 
 interface BookDraft {
   title: string;
   author: string;
   category: string;
-  catalog: string;
   itemCode: string;
   price: number;
+  quantity: number;
   isbn: string;
   badge: string;
 }
@@ -30,6 +36,7 @@ interface BookDraft {
 interface BagItem {
   book: Book;
   quantity: number;
+  cartItemId: number;
 }
 
 interface ReceiptItem {
@@ -59,23 +66,16 @@ interface SaleReceipt {
 })
 export class BookstoreDashboardComponent {
   private readonly authService = inject(AuthService);
+  private readonly storeApi = inject(StoreApiService);
   private readonly router = inject(Router);
 
   readonly signedInRole = this.authService.currentRole ?? 'Student';
   readonly isManager = this.signedInRole === 'Manager';
   readonly isStudent = this.signedInRole === 'Student';
-  readonly categories = ['All books', 'Fiction', 'Mystery', 'Fantasy', 'Non-fiction'];
-  catalogs = ['New & noteworthy', 'Fiction shelf', 'Mystery shelf', 'Fantasy shelf', 'Non-fiction shelf'];
-  books: Book[] = [
-    { id: 1, title: 'The Midnight Library', author: 'Matt Haig', category: 'Fiction', catalog: 'New & noteworthy', itemCode: 'BK-0001', price: 18.00, isbn: '9780525559474', badge: 'Book club pick' },
-    { id: 2, title: 'The Thursday Murder Club', author: 'Richard Osman', category: 'Mystery', catalog: 'Mystery shelf', itemCode: 'BK-0002', price: 17.50, isbn: '9781984880987', badge: 'Bestseller' },
-    { id: 3, title: 'A Psalm for the Wild-Built', author: 'Becky Chambers', category: 'Fantasy', catalog: 'Fantasy shelf', itemCode: 'BK-0003', price: 16.00, isbn: '9781250236210', badge: 'Staff pick' },
-    { id: 4, title: 'Braiding Sweetgrass', author: 'Robin Wall Kimmerer', category: 'Non-fiction', catalog: 'Non-fiction shelf', itemCode: 'BK-0004', price: 19.00, isbn: '9781571313560' },
-    { id: 5, title: 'The Very Secret Society of Irregular Witches', author: 'Sangu Mandanna', category: 'Fantasy', catalog: 'Fantasy shelf', itemCode: 'BK-0005', price: 18.00, isbn: '9780593439358' },
-    { id: 6, title: 'The Creative Act', author: 'Rick Rubin', category: 'Non-fiction', catalog: 'New & noteworthy', itemCode: 'BK-0006', price: 24.00, isbn: '9780593652886', badge: 'A shop favorite' },
-    { id: 7, title: 'The Song of Achilles', author: 'Madeline Miller', category: 'Fiction', catalog: 'Fiction shelf', itemCode: 'BK-0007', price: 17.00, isbn: '9780062060624' },
-    { id: 8, title: 'The House in the Cerulean Sea', author: 'TJ Klune', category: 'Fiction', catalog: 'Fiction shelf', itemCode: 'BK-0008', price: 18.00, isbn: '9781250217288' }
-  ];
+  categories: string[] = ['All books'];
+  books: Book[] = [];
+  loading = true;
+  apiError = '';
 
   searchTerm = '';
   itemCodeQuery = '';
@@ -83,8 +83,7 @@ export class BookstoreDashboardComponent {
   itemCodeSuggestionSelected = false;
   activeItemCodeIndex = -1;
   selectedCategory = 'All books';
-  selectedCatalog = 'All catalogs';
-  newCatalogName = '';
+  newCategoryName = '';
   showBookEditor = false;
   editingBookId: number | null = null;
   bookDraft: BookDraft = this.createBookDraft();
@@ -94,12 +93,13 @@ export class BookstoreDashboardComponent {
   showBag = false;
   paymentMethod: 'cash' | 'card' = 'cash';
   cashReceived: number | null = null;
+  processingPayment = false;
   receipt: SaleReceipt | null = null;
   showReceipt = false;
   editorError = '';
 
   constructor() {
-    this.restoreCatalog();
+    this.loadCatalog();
   }
 
   get filteredBooks(): Book[] {
@@ -107,9 +107,8 @@ export class BookstoreDashboardComponent {
 
     return this.books.filter(book => {
       const matchesCategory = this.selectedCategory === 'All books' || book.category === this.selectedCategory;
-      const matchesCatalog = this.selectedCatalog === 'All catalogs' || book.catalog === this.selectedCatalog;
-      const matchesSearch = !query || `${book.title} ${book.author} ${book.category} ${book.catalog}`.toLowerCase().includes(query);
-      return matchesCategory && matchesCatalog && matchesSearch;
+      const matchesSearch = !query || `${book.title} ${book.author} ${book.category}`.toLowerCase().includes(query);
+      return matchesCategory && matchesSearch;
     });
   }
 
@@ -141,6 +140,13 @@ export class BookstoreDashboardComponent {
     return Math.max(0, Number(this.cashReceived ?? 0) - this.bagTotal);
   }
 
+  onCoverLoaded(book: Book, event: Event): void {
+    const image = event.target;
+    if (image instanceof HTMLImageElement && image.naturalWidth <= 1) {
+      book.coverFailed = true;
+    }
+  }
+
   get canCompleteStudentSale(): boolean {
     return this.isStudent && this.bag.length > 0 &&
       (this.paymentMethod === 'card' || (this.cashReceived !== null && Number(this.cashReceived) >= this.bagTotal));
@@ -160,7 +166,7 @@ export class BookstoreDashboardComponent {
     }
 
     this.addToBag(book);
-    this.itemCodeMessage = `${book.title} added to your cart.`;
+    this.itemCodeMessage = `Adding ${book.title} to your cart...`;
     this.itemCodeQuery = '';
   }
 
@@ -202,31 +208,70 @@ export class BookstoreDashboardComponent {
       return;
     }
 
-    const existingItem = this.bag.find(item => item.book.id === book.id);
-
-    if (existingItem) {
-      existingItem.quantity += 1;
-    } else {
-      this.bag.push({ book, quantity: 1 });
+    const userId = this.authService.currentUserId;
+    if (userId === null) {
+      this.bagMessage = 'Use a numeric Django user ID to save items to your cart.';
+      if (this.isStudent) {
+        this.itemCodeMessage = this.bagMessage;
+      }
+      return;
     }
 
-    this.bagMessage = `${book.title} added to your bag.`;
-    this.checkoutMessage = '';
+    this.storeApi.addCartItem(userId, book.id).subscribe({
+      next: () => {
+        this.loadCart();
+        this.bagMessage = `${book.title} added to your bag.`;
+        if (this.isStudent) {
+          this.itemCodeMessage = `${book.title} added to your cart.`;
+        }
+        this.checkoutMessage = '';
+      },
+      error: error => {
+        const message = this.getApiError(error, 'Could not add this item to your cart.');
+        this.bagMessage = message;
+        if (this.isStudent) {
+          this.itemCodeMessage = message;
+        }
+      }
+    });
   }
 
   changeQuantity(item: BagItem, change: number): void {
-    item.quantity += change;
-
-    if (item.quantity < 1) {
-      this.bag = this.bag.filter(bagItem => bagItem !== item);
+    const userId = this.authService.currentUserId;
+    const quantity = item.quantity + change;
+    if (userId === null) {
+      this.checkoutMessage = 'Use a numeric Django user ID to update your cart.';
+      return;
     }
 
-    this.checkoutMessage = '';
+    if (quantity < 1) {
+      this.removeFromBag(item);
+      return;
+    }
+
+    this.storeApi.updateCartItem(userId, item.cartItemId, quantity).subscribe({
+      next: () => {
+        this.loadCart();
+        this.checkoutMessage = '';
+      },
+      error: error => this.checkoutMessage = this.getApiError(error, 'Could not update your cart.')
+    });
   }
 
   removeFromBag(item: BagItem): void {
-    this.bag = this.bag.filter(bagItem => bagItem !== item);
-    this.checkoutMessage = '';
+    const userId = this.authService.currentUserId;
+    if (userId === null) {
+      this.checkoutMessage = 'Use a numeric Django user ID to update your cart.';
+      return;
+    }
+
+    this.storeApi.removeCartItem(userId, item.cartItemId).subscribe({
+      next: () => {
+        this.loadCart();
+        this.checkoutMessage = '';
+      },
+      error: error => this.checkoutMessage = this.getApiError(error, 'Could not remove this item.')
+    });
   }
 
   checkout(): void {
@@ -234,32 +279,58 @@ export class BookstoreDashboardComponent {
   }
 
   completeStudentSale(): void {
-    if (!this.canCompleteStudentSale) {
+    if (!this.canCompleteStudentSale || this.processingPayment) {
       return;
     }
 
-    const total = this.bagTotal;
-    const received = Number(this.cashReceived ?? 0);
+    const userId = this.authService.currentUserId;
+    if (userId === null) {
+      this.checkoutMessage = 'Use a numeric Django user ID to complete this demo checkout.';
+      return;
+    }
+
+    const payload: CheckoutPayload = {
+      payment_method: this.paymentMethod,
+      ...(this.paymentMethod === 'cash'
+        ? { cash_received: Number(this.cashReceived).toFixed(2) }
+        : {})
+    };
+    this.processingPayment = true;
+    this.checkoutMessage = '';
+    this.storeApi.checkout(userId, payload).subscribe({
+      next: receipt => this.finishStudentSale(receipt),
+      error: error => {
+        this.processingPayment = false;
+        this.checkoutMessage = this.getApiError(error, 'Could not complete the payment. Your cart has not been changed.');
+      }
+    });
+  }
+
+  private finishStudentSale(receipt: ApiSaleReceipt): void {
     this.receipt = {
-      number: `CP-${Date.now().toString().slice(-6)}`,
-      issuedAt: new Date().toLocaleString(),
-      items: this.bag.map(item => ({
-        title: item.book.title,
-        itemCode: item.book.itemCode,
+      number: receipt.receipt_number,
+      issuedAt: new Date(receipt.issued_at).toLocaleString(),
+      items: receipt.items.map(item => ({
+        title: item.item_name,
+        itemCode: item.item_code,
         quantity: item.quantity,
-        unitPrice: item.book.price,
-        lineTotal: item.book.price * item.quantity
+        unitPrice: Number(item.unit_price),
+        lineTotal: Number(item.line_total)
       })),
-      total,
-      paymentMethod: this.paymentMethod,
-      ...(this.paymentMethod === 'cash' ? { cashReceived: received, changeDue: received - total } : {})
+      total: Number(receipt.total),
+      paymentMethod: receipt.payment_method,
+      ...(receipt.cash_received !== null
+        ? { cashReceived: Number(receipt.cash_received), changeDue: Number(receipt.change_due) }
+        : {})
     };
 
     this.bag = [];
     this.cashReceived = null;
     this.paymentMethod = 'cash';
+    this.processingPayment = false;
     this.showBag = false;
     this.showReceipt = true;
+    this.loadCatalog();
   }
 
   closeReceipt(): void {
@@ -273,43 +344,58 @@ export class BookstoreDashboardComponent {
     }
 
     this.editingBookId = book?.id ?? null;
-    this.bookDraft = book ? { ...book, badge: book.badge ?? '' } : this.createBookDraft();
+    this.bookDraft = book ? {
+      title: book.title,
+      author: book.author,
+      category: book.category,
+      itemCode: book.itemCode,
+      price: book.price,
+      quantity: book.quantity,
+      isbn: book.isbn,
+      badge: book.badge
+    } : this.createBookDraft();
     this.editorError = '';
     this.showBookEditor = true;
   }
 
   saveBook(): void {
-    if (!this.isManager || !this.bookDraft.title.trim() || !this.bookDraft.author.trim() || !this.bookDraft.isbn.trim() || !this.bookDraft.itemCode.trim()) {
+    if (!this.isManager || !this.bookDraft.title.trim() || this.bookDraft.category === 'All books') {
       return;
     }
 
-    const itemCode = this.bookDraft.itemCode.trim().toUpperCase();
-    const duplicateCode = this.books.some(item => item.itemCode.toUpperCase() === itemCode && item.id !== this.editingBookId);
-    if (duplicateCode) {
-      this.editorError = 'That item code is already in use.';
+    const category = this.categories.find(item => item === this.bookDraft.category);
+    if (!category) {
+      this.editorError = 'Choose a category from the list.';
       return;
     }
 
-    const book: Book = {
-      ...this.bookDraft,
-      id: this.editingBookId ?? Math.max(0, ...this.books.map(item => item.id)) + 1,
-      title: this.bookDraft.title.trim(),
+    const categoryId = this.categoryIds.get(category);
+    if (categoryId === undefined) {
+      this.editorError = 'The selected category is not available. Reload and try again.';
+      return;
+    }
+
+    const payload: ItemPayload = {
+      item: this.bookDraft.title.trim(),
+      item_quantity: Number(this.bookDraft.quantity),
+      item_price: Number(this.bookDraft.price),
       author: this.bookDraft.author.trim(),
-      itemCode,
+      item_code: this.bookDraft.itemCode.trim(),
       isbn: this.bookDraft.isbn.trim(),
-      badge: this.bookDraft.badge.trim() || undefined,
-      price: Number(this.bookDraft.price)
+      badge: this.bookDraft.badge.trim(),
+      category: categoryId
     };
 
-    if (this.editingBookId === null) {
-      this.books = [book, ...this.books];
-    } else {
-      this.books = this.books.map(item => item.id === book.id ? book : item);
-      this.bag = this.bag.map(item => item.book.id === book.id ? { ...item, book } : item);
-    }
-
-    this.persistCatalog();
-    this.closeBookEditor();
+    const request = this.editingBookId === null
+      ? this.storeApi.createItem(payload)
+      : this.storeApi.updateItem(this.editingBookId, payload);
+    request.subscribe({
+      next: () => {
+        this.closeBookEditor();
+        this.loadCatalog();
+      },
+      error: error => this.editorError = this.getApiError(error, 'Could not save this item.')
+    });
   }
 
   removeBook(book: Book): void {
@@ -317,25 +403,31 @@ export class BookstoreDashboardComponent {
       return;
     }
 
-    this.books = this.books.filter(item => item.id !== book.id);
-    this.bag = this.bag.filter(item => item.book.id !== book.id);
-    this.persistCatalog();
+    this.storeApi.deleteItem(book.id).subscribe({
+      next: () => this.loadCatalog(),
+      error: error => this.apiError = this.getApiError(error, 'Could not remove this item.')
+    });
   }
 
-  addCatalog(): void {
+  addCategory(): void {
     if (!this.isManager) {
       return;
     }
 
-    const name = this.newCatalogName.trim();
-    if (!name || this.catalogs.some(catalog => catalog.toLowerCase() === name.toLowerCase())) {
+    const name = this.newCategoryName.trim();
+    if (!name || this.categories.some(category => category.toLowerCase() === name.toLowerCase())) {
       return;
     }
 
-    this.catalogs = [...this.catalogs, name];
-    this.newCatalogName = '';
-    this.selectedCatalog = name;
-    this.persistCatalog();
+    this.storeApi.createCategory(name).subscribe({
+      next: category => {
+        this.categoryIds.set(category.category_name, category.category_id);
+        this.categories = [...this.categories, category.category_name];
+        this.newCategoryName = '';
+        this.selectedCategory = category.category_name;
+      },
+      error: error => this.apiError = this.getApiError(error, 'Could not create this category.')
+    });
   }
 
   closeBookEditor(): void {
@@ -351,44 +443,95 @@ export class BookstoreDashboardComponent {
   }
 
   private createBookDraft(): BookDraft {
-    const nextId = Math.max(0, ...this.books.map(book => book.id)) + 1;
+    const nextItemCode = Math.max(0, ...this.books.map(book => {
+      const match = /^BK-(\d+)$/.exec(book.itemCode);
+      return match ? Number(match[1]) : 0;
+    })) + 1;
+
     return {
       title: '',
       author: '',
-      category: 'Fiction',
-      catalog: this.catalogs?.[0] ?? 'New & noteworthy',
-      itemCode: `BK-${String(nextId).padStart(4, '0')}`,
+      category: this.categories[1] ?? '',
+      itemCode: `BK-${String(nextItemCode).padStart(4, '0')}`,
       price: 18,
+      quantity: 1,
       isbn: '',
       badge: ''
     };
   }
 
-  private restoreCatalog(): void {
-    try {
-      const savedCatalog = localStorage.getItem('commonplace-store-catalog');
-      if (!savedCatalog) {
-        return;
-      }
+  private readonly categoryIds = new Map<string, number>();
 
-      const parsed = JSON.parse(savedCatalog) as { books?: Array<Book & { itemCode?: string }>; catalogs?: string[] };
-      if (Array.isArray(parsed.books) && Array.isArray(parsed.catalogs)) {
-        this.books = parsed.books.map((book, index) => ({
-          ...book,
-          itemCode: book.itemCode?.trim() || `BK-${String(book.id ?? index + 1).padStart(4, '0')}`
-        }));
-        this.catalogs = parsed.catalogs;
+  private loadCatalog(): void {
+    this.loading = true;
+    this.apiError = '';
+    forkJoin({
+      categories: this.storeApi.getCategories(),
+      items: this.storeApi.getItems()
+    }).subscribe({
+      next: ({ categories, items }) => {
+        this.categoryIds.clear();
+        for (const category of categories) {
+          this.categoryIds.set(category.category_name, category.category_id);
+        }
+        this.categories = ['All books', ...categories.map(category => category.category_name)];
+        this.books = items.map(item => this.toBook(item));
+        this.loading = false;
+        if (this.authService.currentUserId !== null) {
+          this.loadCart();
+        }
+      },
+      error: error => {
+        this.loading = false;
+        this.apiError = this.getApiError(error, 'Could not load the catalog. Check that the backend is running.');
       }
-    } catch {
-      localStorage.removeItem('commonplace-store-catalog');
-    }
+    });
   }
 
-  private persistCatalog(): void {
-    try {
-      localStorage.setItem('commonplace-store-catalog', JSON.stringify({ books: this.books, catalogs: this.catalogs }));
-    } catch {
+  private toBook(item: ApiItem): Book {
+    return {
+      id: item.item_id,
+      title: item.item,
+      author: item.author,
+      category: item.category_name,
+      categoryId: item.category,
+      itemCode: item.item_code || `ITEM-${item.item_id}`,
+      price: Number(item.item_price),
+      quantity: item.item_quantity,
+      isbn: item.isbn,
+      coverUrl: item.cover_url,
+      coverFailed: false,
+      badge: item.badge
+    };
+  }
+
+  private loadCart(): void {
+    const userId = this.authService.currentUserId;
+    if (userId === null) {
+      this.bag = [];
       return;
     }
+
+    this.storeApi.getCart(userId).subscribe({
+      next: cart => {
+        this.bag = cart.cart_items.map((cartItem: ApiCartItem) => ({
+          book: this.toBook(cartItem.item_details),
+          quantity: cartItem.quantity,
+          cartItemId: cartItem.id
+        }));
+      },
+      error: error => this.bagMessage = this.getApiError(error, 'Could not load your cart.')
+    });
+  }
+
+  private getApiError(error: unknown, fallback: string): string {
+    if (error instanceof HttpErrorResponse) {
+      const detail = error.error?.error ?? error.error?.detail;
+      if (typeof detail === 'string') {
+        return detail;
+      }
+    }
+
+    return fallback;
   }
 }

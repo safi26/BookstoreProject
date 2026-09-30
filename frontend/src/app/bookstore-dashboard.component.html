@@ -5,8 +5,6 @@
       <span>COMMONPLACE<small>BOOKS &amp; GOOD COMPANY</small></span>
     </a>
     <nav class="store-nav" aria-label="Store navigation">
-      <a href="#books">Shop books</a>
-      <a href="#our-story">Our story</a>
       <span class="role-chip">{{ signedInRole }}</span>
       <button class="logout-trigger" type="button" (click)="signOut()">Log out</button>
       <button *ngIf="!isManager" class="bag-trigger" type="button" (click)="showBag = true" [attr.aria-label]="(isStudent ? 'Cart, ' : 'Shopping bag, ') + bagCount + ' items'">
@@ -20,7 +18,7 @@
       <div class="book-section-heading">
         <div>
           <p class="store-kicker"><span></span> Fresh from our shelves</p>
-          <h2 id="books-title">New &amp; noteworthy</h2>
+          <h2 id="books-title">{{ selectedCategory }}</h2>
         </div>
         <p class="book-section-note">A few good places to start.</p>
       </div>
@@ -28,16 +26,16 @@
       <div class="manager-tools" *ngIf="isManager">
         <button class="manager-primary" type="button" (click)="openBookEditor()">Add book <span aria-hidden="true">+</span></button>
         <label class="catalog-filter">
-          <span>Catalog</span>
-          <select name="managerCatalogFilter" [(ngModel)]="selectedCatalog">
-            <option>All catalogs</option>
-            <option *ngFor="let catalog of catalogs">{{ catalog }}</option>
+          <span>Category</span>
+          <select name="managerCategoryFilter" [(ngModel)]="selectedCategory">
+            <option>All books</option>
+            <option *ngFor="let category of categories.slice(1)">{{ category }}</option>
           </select>
         </label>
-        <form class="catalog-create" (ngSubmit)="addCatalog()">
-          <label for="new-catalog">Create catalog</label>
-          <input id="new-catalog" name="newCatalogName" [(ngModel)]="newCatalogName" placeholder="Catalog name" required />
-          <button type="submit" [disabled]="!newCatalogName.trim()" aria-label="Create catalog">Create</button>
+        <form class="catalog-create" (ngSubmit)="addCategory()">
+          <label for="new-category">Create category</label>
+          <input id="new-category" name="newCategoryName" [(ngModel)]="newCategoryName" placeholder="Category name" required />
+          <button type="submit" [disabled]="!newCategoryName.trim()" aria-label="Create category">Create</button>
         </form>
       </div>
 
@@ -49,10 +47,10 @@
             (click)="selectedCategory = category">{{ category }}</button>
         </div>
         <label *ngIf="!isStudent" class="catalog-filter">
-          <span>Catalog</span>
-          <select name="catalogFilter" [(ngModel)]="selectedCatalog">
-            <option>All catalogs</option>
-            <option *ngFor="let catalog of catalogs">{{ catalog }}</option>
+          <span>Category</span>
+          <select name="categoryFilter" [(ngModel)]="selectedCategory">
+            <option>All books</option>
+            <option *ngFor="let category of categories.slice(1)">{{ category }}</option>
           </select>
         </label>
         <label *ngIf="!isStudent" class="book-search">
@@ -84,19 +82,25 @@
         <p *ngIf="itemCodeMessage" class="item-code-message" role="status">{{ itemCodeMessage }}</p>
       </form>
 
-      <div class="book-grid" *ngIf="filteredBooks.length; else noBooks">
+      <p *ngIf="loading" class="empty-results" role="status">Loading the catalog...</p>
+      <p *ngIf="apiError" class="empty-results" role="alert">{{ apiError }}</p>
+      <div class="book-grid" *ngIf="!loading && filteredBooks.length; else noBooks">
         <article class="book-item" *ngFor="let book of filteredBooks">
           <div class="book-cover-wrap">
             <span class="book-badge" *ngIf="book.badge">{{ book.badge }}</span>
-            <img class="book-cover" [src]="'https://covers.openlibrary.org/b/isbn/' + book.isbn + '-L.jpg'"
-              [alt]="'Cover of ' + book.title" loading="lazy" />
+            <img *ngIf="book.coverUrl && !book.coverFailed" class="book-cover" [src]="book.coverUrl"
+              [alt]="'Cover of ' + book.title" loading="lazy" (load)="onCoverLoaded(book, $event)"
+              (error)="book.coverFailed = true" />
+            <div *ngIf="!book.coverUrl || book.coverFailed" class="book-cover-fallback" aria-hidden="true">
+              <span>COMMONPLACE</span><strong>{{ book.title }}</strong><small>{{ book.category }}</small>
+            </div>
           </div>
           <div class="book-info">
             <p class="book-category">{{ book.category }}</p>
             <h3>{{ book.title }}</h3>
             <p class="book-author">{{ book.author }}</p>
-            <p class="book-item-code">Item code: <strong>{{ book.itemCode }}</strong></p>
-              <p class="book-catalog">{{ book.catalog }}</p>
+            <p class="book-item-code">Item ID: <strong>{{ book.itemCode }}</strong></p>
+            <p class="book-catalog">In stock: {{ book.quantity }}</p>
             <div class="book-buy-row">
               <strong>{{ book.price | currency:'USD' }}</strong>
               <button *ngIf="!isManager" type="button" class="add-button" (click)="addToBag(book)"
@@ -109,7 +113,7 @@
           </div>
         </article>
       </div>
-      <ng-template #noBooks><p class="empty-results">No books found. Try another title or category.</p></ng-template>
+      <ng-template #noBooks><p *ngIf="!loading && !apiError" class="empty-results">No books found. Try another title or category.</p></ng-template>
           <p *ngIf="!isManager" class="visually-hidden" role="status" aria-live="polite">{{ bagMessage }}</p>
     </section>
 
@@ -139,10 +143,19 @@
     <p *ngIf="bag.length === 0" class="bag-empty">{{ isStudent ? 'Your cart is empty. Add a book to get started.' : 'Your bag is taking a little reading break. Add a book to get started.' }}</p>
     <div class="bag-items" *ngIf="bag.length">
       <article class="bag-item" *ngFor="let item of bag">
-        <img [src]="'https://covers.openlibrary.org/b/isbn/' + item.book.isbn + '-S.jpg'" [alt]="'Cover of ' + item.book.title" />
+        <img *ngIf="item.book.coverUrl && !item.book.coverFailed" [src]="item.book.coverUrl"
+          [alt]="'Cover of ' + item.book.title" (load)="onCoverLoaded(item.book, $event)"
+          (error)="item.book.coverFailed = true" />
+        <div *ngIf="!item.book.coverUrl || item.book.coverFailed" class="bag-cover-fallback" aria-hidden="true">{{ item.book.title.charAt(0) }}</div>
         <div class="bag-item-info">
           <h3>{{ item.book.title }}</h3>
-          <p>{{ item.book.author }}</p>
+          <div class="bag-item-details">
+            <p *ngIf="item.book.author">{{ item.book.author }}</p>
+            <p>{{ item.book.category }} · Item {{ item.book.itemCode }}</p>
+            <p *ngIf="item.book.isbn">ISBN {{ item.book.isbn }}</p>
+            <p>Unit price {{ item.book.price | currency:'USD' }} · In stock {{ item.book.quantity }}</p>
+            <span *ngIf="item.book.badge" class="bag-item-badge">{{ item.book.badge }}</span>
+          </div>
           <div class="quantity-control">
             <button type="button" [attr.aria-label]="'Remove one ' + item.book.title + (isStudent ? ' from cart' : ' from bag')" (click)="changeQuantity(item, -1)">−</button>
             <span>{{ item.quantity }}</span>
@@ -169,8 +182,8 @@
         <p *ngIf="cashReceived !== null && cashReceived >= bagTotal" class="change-due">Change due <strong>{{ changeDue | currency:'USD' }}</strong></p>
       </div>
       <p *ngIf="isStudent && paymentMethod === 'card'" class="card-demo-note">Card checkout is a demo; no card details are collected and no real charge is made.</p>
-      <button *ngIf="isStudent" class="complete-payment" type="button" [disabled]="!canCompleteStudentSale" (click)="completeStudentSale()">
-        {{ paymentMethod === 'cash' ? 'Complete cash payment' : 'Complete card payment' }} <span>{{ bagTotal | currency:'USD' }}</span>
+      <button *ngIf="isStudent" class="complete-payment" type="button" [disabled]="!canCompleteStudentSale || processingPayment" (click)="completeStudentSale()">
+        {{ processingPayment ? 'Processing payment...' : (paymentMethod === 'cash' ? 'Complete cash payment' : 'Complete card payment') }} <span>{{ bagTotal | currency:'USD' }}</span>
       </button>
       <button *ngIf="!isStudent" type="button" (click)="checkout()">Continue to checkout <span aria-hidden="true">↗</span></button>
       <p *ngIf="checkoutMessage" role="status">{{ checkoutMessage }}</p>
@@ -188,24 +201,20 @@
       </header>
       <form class="book-editor-form" #bookForm="ngForm" (ngSubmit)="saveBook()">
         <label>Title<input name="title" [(ngModel)]="bookDraft.title" required /></label>
-        <label>Author<input name="author" [(ngModel)]="bookDraft.author" required /></label>
+        <label>Author<input name="author" [(ngModel)]="bookDraft.author" /></label>
         <div class="editor-fields-row">
           <label>Category
             <select name="category" [(ngModel)]="bookDraft.category" required>
               <option *ngFor="let category of categories.slice(1)">{{ category }}</option>
             </select>
           </label>
-          <label>Catalog
-            <select name="catalog" [(ngModel)]="bookDraft.catalog" required>
-              <option *ngFor="let catalog of catalogs">{{ catalog }}</option>
-            </select>
-          </label>
         </div>
-        <label>Item code<input name="itemCode" [(ngModel)]="bookDraft.itemCode" required /></label>
+        <label>Item code<input name="itemCode" [(ngModel)]="bookDraft.itemCode" /></label>
         <div class="editor-fields-row">
           <label>Price<input name="price" type="number" min="0.01" step="0.01" [(ngModel)]="bookDraft.price" required /></label>
-          <label>ISBN<input name="isbn" inputmode="numeric" [(ngModel)]="bookDraft.isbn" required /></label>
+          <label>Stock quantity<input name="quantity" type="number" min="0" step="1" [(ngModel)]="bookDraft.quantity" required /></label>
         </div>
+        <label>ISBN<input name="isbn" inputmode="numeric" maxlength="13" [(ngModel)]="bookDraft.isbn" /></label>
         <label>Badge <span class="optional-label">Optional</span><input name="badge" [(ngModel)]="bookDraft.badge" /></label>
         <p *ngIf="editorError" class="payment-error" role="alert">{{ editorError }}</p>
         <div class="book-editor-actions">

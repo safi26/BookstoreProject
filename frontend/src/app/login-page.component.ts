@@ -25,7 +25,7 @@ export class LoginPageComponent {
       return;
     }
 
-    this.authService.startDemoSession(this.userRole);
+    this.authService.startDemoSession(this.userRole, this.userId.trim());
     void this.router.navigateByUrl('/store');
   }
 }

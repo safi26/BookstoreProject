@@ -1,6 +1,6 @@
 from rest_framework import serializers
 
-from .models import Category, Item, Cart, CartItem
+from .models import Category, Item, Cart, CartItem, Sale, SaleItem
 
 
 class CategorySerializer(serializers.ModelSerializer):
@@ -17,6 +17,7 @@ class ItemSerializer(serializers.ModelSerializer):
         source="category.category_name",
         read_only=True,
     )
+    cover_url = serializers.SerializerMethodField()
 
     class Meta:
         model = Item
@@ -25,12 +26,31 @@ class ItemSerializer(serializers.ModelSerializer):
             "item",
             "item_quantity",
             "item_price",
+            "author",
+            "item_code",
+            "isbn",
+            "badge",
+            "cover_url",
             "category",
             "category_name",
         ]
+        read_only_fields = ["category_name", "cover_url"]
+
+    def get_cover_url(self, obj):
+        if obj.cover_url:
+            return obj.cover_url
+        if not obj.isbn:
+            return ""
+
+        return f"https://covers.openlibrary.org/b/isbn/{obj.isbn}-L.jpg"
 
 
 class CartItemSerializer(serializers.ModelSerializer):
+    item_details = ItemSerializer(
+        source="item",
+        read_only=True,
+    )
+
     item_name = serializers.CharField(
         source="item.item",
         read_only=True,
@@ -50,6 +70,7 @@ class CartItemSerializer(serializers.ModelSerializer):
         fields = [
             "id",
             "item",
+            "item_details",
             "item_name",
             "item_price",
             "quantity",
@@ -92,3 +113,32 @@ class CartSerializer(serializers.ModelSerializer):
             cart_item.item.item_price * cart_item.quantity
             for cart_item in obj.cart_items.all()
         )
+
+
+class SaleItemSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = SaleItem
+        fields = [
+            "item_name",
+            "item_code",
+            "quantity",
+            "unit_price",
+            "line_total",
+        ]
+
+
+class SaleReceiptSerializer(serializers.ModelSerializer):
+    issued_at = serializers.DateTimeField(source="created_at", read_only=True)
+    items = SaleItemSerializer(source="sale_items", many=True, read_only=True)
+
+    class Meta:
+        model = Sale
+        fields = [
+            "receipt_number",
+            "issued_at",
+            "items",
+            "total",
+            "payment_method",
+            "cash_received",
+            "change_due",
+        ]

@@ -5,6 +5,7 @@ import { Observable } from 'rxjs';
 export interface ApiCategory {
   category_id: number;
   category_name: string;
+  tax_exempt: boolean;
 }
 
 export interface ApiItem {
@@ -19,6 +20,7 @@ export interface ApiItem {
   category: number;
   category_name: string;
   cover_url: string;
+  tax_exempt: boolean;
 }
 
 export interface ApiCartItem {
@@ -28,7 +30,9 @@ export interface ApiCartItem {
   item_name: string;
   item_price: string;
   quantity: number;
-  subtotal: number;
+  subtotal: string;
+  tax_amount: string;
+  line_total: string;
 }
 
 export interface ApiCart {
@@ -36,7 +40,9 @@ export interface ApiCart {
   user: number;
   cart_items: ApiCartItem[];
   total_items: number;
-  total_price: number;
+  subtotal: string;
+  tax_amount: string;
+  total_price: string;
 }
 
 export interface ApiSaleItem {
@@ -45,12 +51,15 @@ export interface ApiSaleItem {
   quantity: number;
   unit_price: string;
   line_total: string;
+  tax_amount: string;
 }
 
 export interface ApiSaleReceipt {
   receipt_number: string;
   issued_at: string;
   items: ApiSaleItem[];
+  subtotal: string;
+  tax_amount: string;
   total: string;
   payment_method: 'cash' | 'card';
   cash_received: string | null;
@@ -71,6 +80,7 @@ export interface ItemPayload {
   isbn: string;
   badge: string;
   category: number;
+  tax_exempt: boolean;
 }
 
 @Injectable({ providedIn: 'root' })
@@ -82,8 +92,20 @@ export class StoreApiService {
     return this.http.get<ApiCategory[]>(`${this.apiUrl}/categories/`);
   }
 
-  createCategory(category_name: string): Observable<ApiCategory> {
-    return this.http.post<ApiCategory>(`${this.apiUrl}/categories/`, { category_name });
+  createCategory(categoryName: string): Observable<ApiCategory> {
+    return this.http.post<ApiCategory>(`${this.apiUrl}/categories/`, {
+      category_name: categoryName
+    });
+  }
+
+  deleteCategory(categoryId: number): Observable<void> {
+    return this.http.delete<void>(`${this.apiUrl}/categories/${categoryId}/`);
+  }
+
+  updateCategoryTaxExemption(categoryId: number, taxExempt: boolean): Observable<ApiCategory> {
+    return this.http.patch<ApiCategory>(`${this.apiUrl}/categories/${categoryId}/`, {
+      tax_exempt: taxExempt
+    });
   }
 
   getItems(): Observable<ApiItem[]> {
@@ -96,6 +118,12 @@ export class StoreApiService {
 
   updateItem(itemId: number, payload: ItemPayload): Observable<ApiItem> {
     return this.http.put<ApiItem>(`${this.apiUrl}/items/${itemId}/`, payload);
+  }
+
+  updateItemTaxExemption(itemId: number, taxExempt: boolean): Observable<ApiItem> {
+    return this.http.patch<ApiItem>(`${this.apiUrl}/items/${itemId}/`, {
+      tax_exempt: taxExempt
+    });
   }
 
   deleteItem(itemId: number): Observable<void> {

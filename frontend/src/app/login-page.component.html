@@ -17,7 +17,7 @@
 
     <section class="login-form-section" aria-labelledby="login-title">
       <h2 id="login-title">Log in</h2>
-      <p class="form-intro">Choose your account type and enter your details to continue.</p>
+      <p class="form-intro">Choose your account type and enter your details to continue. Use an existing numeric Django user ID to save cart items.</p>
 
       <form #loginForm="ngForm" (ngSubmit)="onSubmit()" novalidate>
         <fieldset class="role-selection">
@@ -38,12 +38,14 @@
             type="text"
             inputmode="numeric"
             autocomplete="username"
+            pattern="[1-9][0-9]*"
             placeholder="Enter your User ID"
             [(ngModel)]="userId"
             required
             #userIdField="ngModel"
           />
-          <span class="field-error" *ngIf="userIdField.invalid && userIdField.touched">Enter your User ID.</span>
+          <span class="field-error" *ngIf="userIdField.errors?.['required'] && userIdField.touched">Enter your User ID.</span>
+          <span class="field-error" *ngIf="userIdField.errors?.['pattern'] && userIdField.touched">Enter a positive numeric Django user ID.</span>
         </div>
 
         <div class="field-group">

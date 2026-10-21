@@ -18,6 +18,7 @@ from .serializers import (
     CartItemSerializer,
     SaleReceiptSerializer,
 )
+from .tax import calculate_line_tax
 
 
 User = get_user_model()
@@ -26,6 +27,15 @@ User = get_user_model()
 class CategoryViewSet(viewsets.ModelViewSet):
     queryset = Category.objects.all().order_by("category_name")
     serializer_class = CategorySerializer
+
+    def destroy(self, request, *args, **kwargs):
+        category = self.get_object()
+        if category.items.exists():
+            return Response(
+                {"detail": "Move or remove this category's items before deleting it."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        return super().destroy(request, *args, **kwargs)
 
 
 class ItemViewSet(viewsets.ModelViewSet):
@@ -287,7 +297,7 @@ class CheckoutView(APIView):
                 item.pk: item
                 for item in Item.objects.select_for_update().filter(
                     pk__in=[cart_item.item_id for cart_item in cart_items]
-                )
+                ).select_related("category")
             }
             for cart_item in cart_items:
                 item = locked_items[cart_item.item_id]
@@ -297,23 +307,37 @@ class CheckoutView(APIView):
                         status=status.HTTP_400_BAD_REQUEST,
                     )
 
-            total = sum(
-                (locked_items[cart_item.item_id].item_price * cart_item.quantity
-                 for cart_item in cart_items),
+            subtotal = sum(
+                (
+                    locked_items[cart_item.item_id].item_price * cart_item.quantity
+                    for cart_item in cart_items
+                ),
                 Decimal("0.00"),
             ).quantize(Decimal("0.01"))
+            tax_amount = sum(
+                (
+                    calculate_line_tax(
+                        locked_items[cart_item.item_id],
+                        cart_item.quantity,
+                    )
+                    for cart_item in cart_items
+                ),
+                Decimal("0.00"),
+            ).quantize(Decimal("0.01"))
+            total = subtotal + tax_amount
             if payment_method == "cash" and cash_received < total:
                 return Response(
                     {"error": "Cash received must cover the cart total."},
                     status=status.HTTP_400_BAD_REQUEST,
                 )
-
             sale = Sale.objects.create(
                 user=user,
                 receipt_number=(
                     f"CP-{timezone.now():%Y%m%d}-{uuid4().hex[:6].upper()}"
                 ),
                 payment_method=payment_method,
+                subtotal=subtotal,
+                tax_amount=tax_amount,
                 total=total,
                 cash_received=cash_received,
                 change_due=(cash_received - total if cash_received is not None else Decimal("0.00")),
@@ -322,6 +346,7 @@ class CheckoutView(APIView):
             for cart_item in cart_items:
                 item = locked_items[cart_item.item_id]
                 line_total = (item.item_price * cart_item.quantity).quantize(Decimal("0.01"))
+                line_tax = calculate_line_tax(item, cart_item.quantity)
                 SaleItem.objects.create(
                     sale=sale,
                     item=item,
@@ -330,6 +355,7 @@ class CheckoutView(APIView):
                     quantity=cart_item.quantity,
                     unit_price=item.item_price,
                     line_total=line_total,
+                    tax_amount=line_tax,
                 )
                 item.item_quantity -= cart_item.quantity
                 item.save(update_fields=["item_quantity"])

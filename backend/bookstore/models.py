@@ -5,6 +5,7 @@ from django.db import models
 class Category(models.Model):
     category_id = models.AutoField(primary_key=True)
     category_name = models.CharField(max_length=200)
+    tax_exempt = models.BooleanField(default=False)
 
     def __str__(self):
         return self.category_name
@@ -26,6 +27,7 @@ class Item(models.Model):
     isbn = models.CharField(max_length=13, blank=True, default="")
     badge = models.CharField(max_length=80, blank=True, default="")
     cover_url = models.URLField(blank=True, default="")
+    tax_exempt = models.BooleanField(default=False)
 
     category = models.ForeignKey(
         Category,
@@ -90,6 +92,8 @@ class Sale(models.Model):
     )
     receipt_number = models.CharField(max_length=32, unique=True)
     payment_method = models.CharField(max_length=10, choices=PAYMENT_METHODS)
+    subtotal = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    tax_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     total = models.DecimalField(max_digits=10, decimal_places=2)
     cash_received = models.DecimalField(
         max_digits=10,
@@ -122,6 +126,7 @@ class SaleItem(models.Model):
     quantity = models.PositiveIntegerField()
     unit_price = models.DecimalField(max_digits=10, decimal_places=2)
     line_total = models.DecimalField(max_digits=10, decimal_places=2)
+    tax_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0)
 
     def __str__(self):
         return f"{self.item_name} x {self.quantity}"

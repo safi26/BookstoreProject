@@ -1,6 +1,7 @@
 from rest_framework import serializers
 
 from .models import Category, Item, Cart, CartItem, Sale, SaleItem
+from .tax import calculate_line_tax
 
 
 class CategorySerializer(serializers.ModelSerializer):
@@ -9,6 +10,7 @@ class CategorySerializer(serializers.ModelSerializer):
         fields = [
             "category_id",
             "category_name",
+            "tax_exempt",
         ]
 
 
@@ -33,6 +35,7 @@ class ItemSerializer(serializers.ModelSerializer):
             "cover_url",
             "category",
             "category_name",
+            "tax_exempt",
         ]
         read_only_fields = ["category_name", "cover_url"]
 
@@ -64,6 +67,8 @@ class CartItemSerializer(serializers.ModelSerializer):
     )
 
     subtotal = serializers.SerializerMethodField()
+    tax_amount = serializers.SerializerMethodField()
+    line_total = serializers.SerializerMethodField()
 
     class Meta:
         model = CartItem
@@ -75,10 +80,18 @@ class CartItemSerializer(serializers.ModelSerializer):
             "item_price",
             "quantity",
             "subtotal",
+            "tax_amount",
+            "line_total",
         ]
 
     def get_subtotal(self, obj):
         return obj.item.item_price * obj.quantity
+
+    def get_tax_amount(self, obj):
+        return calculate_line_tax(obj.item, obj.quantity)
+
+    def get_line_total(self, obj):
+        return self.get_subtotal(obj) + self.get_tax_amount(obj)
 
 
 class CartSerializer(serializers.ModelSerializer):
@@ -88,6 +101,8 @@ class CartSerializer(serializers.ModelSerializer):
     )
 
     total_items = serializers.SerializerMethodField()
+    subtotal = serializers.SerializerMethodField()
+    tax_amount = serializers.SerializerMethodField()
     total_price = serializers.SerializerMethodField()
 
     class Meta:
@@ -97,6 +112,8 @@ class CartSerializer(serializers.ModelSerializer):
             "user",
             "cart_items",
             "total_items",
+            "subtotal",
+            "tax_amount",
             "total_price",
             "created_at",
             "updated_at",
@@ -108,11 +125,20 @@ class CartSerializer(serializers.ModelSerializer):
             for cart_item in obj.cart_items.all()
         )
 
-    def get_total_price(self, obj):
+    def get_subtotal(self, obj):
         return sum(
             cart_item.item.item_price * cart_item.quantity
             for cart_item in obj.cart_items.all()
         )
+
+    def get_tax_amount(self, obj):
+        return sum(
+            calculate_line_tax(cart_item.item, cart_item.quantity)
+            for cart_item in obj.cart_items.all()
+        )
+
+    def get_total_price(self, obj):
+        return self.get_subtotal(obj) + self.get_tax_amount(obj)
 
 
 class SaleItemSerializer(serializers.ModelSerializer):
@@ -124,6 +150,7 @@ class SaleItemSerializer(serializers.ModelSerializer):
             "quantity",
             "unit_price",
             "line_total",
+            "tax_amount",
         ]
 
 
@@ -137,6 +164,8 @@ class SaleReceiptSerializer(serializers.ModelSerializer):
             "receipt_number",
             "issued_at",
             "items",
+            "subtotal",
+            "tax_amount",
             "total",
             "payment_method",
             "cash_received",

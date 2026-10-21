@@ -10,3 +10,4 @@ venv/
 
 # Angular build output
 frontend/dist/
+frontend/.certs/

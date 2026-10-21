@@ -8,7 +8,7 @@ def is_manager(user):
 
 @admin.register(Category)
 class CategoryAdmin(admin.ModelAdmin):
-    list_display = ("category_id", "category_name")
+    list_display = ("category_id", "category_name", "tax_exempt")
     search_fields = ("category_name",)
 
     def has_add_permission(self, request):
@@ -23,9 +23,10 @@ class ItemAdmin(admin.ModelAdmin):
         "category",
         "item_quantity",
         "item_price",
+        "tax_exempt",
     )
 
-    list_filter = ("category",)
+    list_filter = ("category", "tax_exempt")
     search_fields = ("item",)
 
     def has_add_permission(self, request):

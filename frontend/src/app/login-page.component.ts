@@ -21,11 +21,12 @@ export class LoginPageComponent {
   showPassword = false;
 
   onSubmit(): void {
-    if (!this.userId.trim() || !this.password) {
+    const userId = this.userId.trim();
+    if (!/^[1-9]\d*$/.test(userId) || !Number.isSafeInteger(Number(userId)) || !this.password) {
       return;
     }
 
-    this.authService.startDemoSession(this.userRole, this.userId.trim());
+    this.authService.startDemoSession(this.userRole, userId);
     void this.router.navigateByUrl('/store');
   }
 }

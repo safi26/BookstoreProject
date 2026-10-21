@@ -24,20 +24,46 @@
       </div>
 
       <div class="manager-tools" *ngIf="isManager">
-        <button class="manager-primary" type="button" (click)="openBookEditor()">Add book <span aria-hidden="true">+</span></button>
+        <button class="manager-primary" type="button" (click)="openBookEditor()">Add item <span aria-hidden="true">+</span></button>
+        <button class="manager-secondary" type="button" [disabled]="creatingCategory"
+          (click)="showCategoryCreator = !showCategoryCreator; categoryError = ''">
+          {{ showCategoryCreator ? 'Close category form' : 'Add category' }} <span aria-hidden="true">{{ showCategoryCreator ? '×' : '+' }}</span>
+        </button>
         <label class="catalog-filter">
           <span>Category</span>
           <select name="managerCategoryFilter" [(ngModel)]="selectedCategory">
-            <option>All books</option>
+            <option>All items</option>
             <option *ngFor="let category of categories.slice(1)">{{ category }}</option>
           </select>
         </label>
-        <form class="catalog-create" (ngSubmit)="addCategory()">
-          <label for="new-category">Create category</label>
-          <input id="new-category" name="newCategoryName" [(ngModel)]="newCategoryName" placeholder="Category name" required />
-          <button type="submit" [disabled]="!newCategoryName.trim()" aria-label="Create category">Create</button>
-        </form>
+        <label *ngIf="selectedCategory !== 'All items'" class="tax-exemption-toggle">
+          <input type="checkbox" [checked]="selectedCategoryTaxExempt" [disabled]="taxExemptionUpdating"
+            (change)="setCategoryTaxExempt($event)" />
+          <span>Exempt all items in this category</span>
+        </label>
       </div>
+      <form *ngIf="isManager && showCategoryCreator" class="category-create-form" (ngSubmit)="createCategory()">
+        <label for="new-category-name">New category name</label>
+        <input id="new-category-name" name="newCategoryName" type="text" maxlength="200"
+          [(ngModel)]="categoryDraft" [disabled]="creatingCategory" required />
+        <button class="manager-primary" type="submit" [disabled]="creatingCategory || !categoryDraft.trim()">
+          {{ creatingCategory ? 'Adding category...' : 'Save category' }}
+        </button>
+      </form>
+      <div *ngIf="isManager" class="manager-category-list" aria-label="Manage categories">
+        <div *ngFor="let category of categories.slice(1)" class="manager-category-row">
+          <button class="category-button" type="button" [class.is-selected]="selectedCategory === category"
+            [attr.aria-pressed]="selectedCategory === category" (click)="selectedCategory = category">
+            {{ category }}
+          </button>
+          <button class="remove-category" type="button" [disabled]="deletingCategory || categoryItemCount(category) > 0"
+            [attr.aria-label]="'Remove ' + category + ' category'"
+            [title]="categoryItemCount(category) > 0 ? 'Move or remove its items before deleting this category' : 'Remove category'"
+            (click)="deleteCategory(category)">Remove</button>
+        </div>
+      </div>
+      <p *ngIf="categoryError" class="tax-exemption-error" role="alert">{{ categoryError }}</p>
+      <p *ngIf="taxExemptionError" class="tax-exemption-error" role="alert">{{ taxExemptionError }}</p>
 
       <div class="catalog-controls" *ngIf="!isManager">
         <div class="category-list" aria-label="Filter by category">
@@ -49,16 +75,38 @@
         <label *ngIf="!isStudent" class="catalog-filter">
           <span>Category</span>
           <select name="categoryFilter" [(ngModel)]="selectedCategory">
-            <option>All books</option>
+            <option>All items</option>
             <option *ngFor="let category of categories.slice(1)">{{ category }}</option>
           </select>
         </label>
         <label *ngIf="!isStudent" class="book-search">
           <span aria-hidden="true">⌕</span>
-          <span class="visually-hidden">Search books</span>
-          <input type="search" name="bookSearch" [(ngModel)]="searchTerm" placeholder="Title, author, or subject" />
+          <span class="visually-hidden">Search items</span>
+          <input type="search" name="bookSearch" [(ngModel)]="searchTerm" placeholder="Item name, author, or category" />
         </label>
       </div>
+
+      <section *ngIf="categoryPreviewBooks.length" class="category-preview"
+        aria-label="Representative items in the selected category">
+        <div class="category-preview-copy">
+          <p class="store-kicker"><span></span> Shelf spotlight</p>
+          <h3>{{ selectedCategory === 'All items' ? 'A little of everything' : selectedCategory }}</h3>
+          <p>A few good finds from this shelf.</p>
+        </div>
+        <div class="category-preview-items">
+          <article *ngFor="let book of categoryPreviewBooks" class="category-preview-item">
+            <div class="category-preview-image">
+              <img *ngIf="book.coverUrl && !book.coverFailed" [src]="book.coverUrl"
+                [alt]="'Cover of ' + book.title" loading="lazy" (error)="book.coverFailed = true" />
+              <div *ngIf="!book.coverUrl || book.coverFailed" class="category-preview-fallback" aria-hidden="true">
+                <span>COMMONPLACE</span>
+                <strong>{{ book.title }}</strong>
+              </div>
+            </div>
+            <p>{{ book.title }}</p>
+          </article>
+        </div>
+      </section>
 
       <form *ngIf="isStudent" class="item-code-entry" (ngSubmit)="addByItemCode()">
         <label for="student-item-code">Add by item code</label>
@@ -84,12 +132,13 @@
 
       <p *ngIf="loading" class="empty-results" role="status">Loading the catalog...</p>
       <p *ngIf="apiError" class="empty-results" role="alert">{{ apiError }}</p>
+      <p *ngIf="bagMessage" class="cart-feedback" role="status">{{ bagMessage }}</p>
       <div class="book-grid" *ngIf="!loading && filteredBooks.length; else noBooks">
         <article class="book-item" *ngFor="let book of filteredBooks">
           <div class="book-cover-wrap">
             <span class="book-badge" *ngIf="book.badge">{{ book.badge }}</span>
-            <img *ngIf="book.coverUrl && !book.coverFailed" class="book-cover" [src]="book.coverUrl"
-              [alt]="'Cover of ' + book.title" loading="lazy" (load)="onCoverLoaded(book, $event)"
+            <img *ngIf="book.coverUrl && !book.coverFailed" class="book-cover" [class.product-image]="book.isProductImage" [src]="book.coverUrl"
+              [alt]="'Image of ' + book.title" loading="lazy" (load)="onCoverLoaded(book, $event)"
               (error)="book.coverFailed = true" />
             <div *ngIf="!book.coverUrl || book.coverFailed" class="book-cover-fallback" aria-hidden="true">
               <span>COMMONPLACE</span><strong>{{ book.title }}</strong><small>{{ book.category }}</small>
@@ -98,6 +147,7 @@
           <div class="book-info">
             <p class="book-category">{{ book.category }}</p>
             <h3>{{ book.title }}</h3>
+            <span *ngIf="isBookTaxExempt(book)" class="tax-exempt-badge">Tax exempt</span>
             <p class="book-author">{{ book.author }}</p>
             <p class="book-item-code">Item ID: <strong>{{ book.itemCode }}</strong></p>
             <p class="book-catalog">In stock: {{ book.quantity }}</p>
@@ -107,14 +157,18 @@
                 [attr.aria-label]="'Add ' + book.title + (isStudent ? ' to cart' : ' to bag')">{{ isStudent ? 'Add to cart' : 'Add to bag' }} <span aria-hidden="true">+</span></button>
             </div>
               <div class="manager-book-actions" *ngIf="isManager">
+                <label class="tax-exemption-toggle item-tax-toggle">
+                  <input type="checkbox" [checked]="book.taxExempt" [disabled]="taxExemptionUpdating"
+                    (change)="setItemTaxExempt(book, $event)" />
+                  <span>Item tax exempt</span>
+                </label>
                 <button type="button" (click)="openBookEditor(book)">Edit</button>
                 <button type="button" (click)="removeBook(book)" [attr.aria-label]="'Remove ' + book.title">Remove</button>
               </div>
           </div>
         </article>
       </div>
-      <ng-template #noBooks><p *ngIf="!loading && !apiError" class="empty-results">No books found. Try another title or category.</p></ng-template>
-          <p *ngIf="!isManager" class="visually-hidden" role="status" aria-live="polite">{{ bagMessage }}</p>
+      <ng-template #noBooks><p *ngIf="!loading && !apiError" class="empty-results">No items found. Try another name or category.</p></ng-template>
     </section>
 
     <section class="our-story" id="our-story" aria-labelledby="story-title">
@@ -143,8 +197,8 @@
     <p *ngIf="bag.length === 0" class="bag-empty">{{ isStudent ? 'Your cart is empty. Add a book to get started.' : 'Your bag is taking a little reading break. Add a book to get started.' }}</p>
     <div class="bag-items" *ngIf="bag.length">
       <article class="bag-item" *ngFor="let item of bag">
-        <img *ngIf="item.book.coverUrl && !item.book.coverFailed" [src]="item.book.coverUrl"
-          [alt]="'Cover of ' + item.book.title" (load)="onCoverLoaded(item.book, $event)"
+        <img *ngIf="item.book.coverUrl && !item.book.coverFailed" [class.product-image]="item.book.isProductImage" [src]="item.book.coverUrl"
+          [alt]="'Image of ' + item.book.title" (load)="onCoverLoaded(item.book, $event)"
           (error)="item.book.coverFailed = true" />
         <div *ngIf="!item.book.coverUrl || item.book.coverFailed" class="bag-cover-fallback" aria-hidden="true">{{ item.book.title.charAt(0) }}</div>
         <div class="bag-item-info">
@@ -157,20 +211,22 @@
             <span *ngIf="item.book.badge" class="bag-item-badge">{{ item.book.badge }}</span>
           </div>
           <div class="quantity-control">
-            <button type="button" [attr.aria-label]="'Remove one ' + item.book.title + (isStudent ? ' from cart' : ' from bag')" (click)="changeQuantity(item, -1)">−</button>
+            <button type="button" [disabled]="cancellingTransaction" [attr.aria-label]="'Remove one ' + item.book.title + (isStudent ? ' from cart' : ' from bag')" (click)="changeQuantity(item, -1)">−</button>
             <span>{{ item.quantity }}</span>
-            <button type="button" [attr.aria-label]="'Add one ' + item.book.title + (isStudent ? ' to cart' : ' to bag')" (click)="changeQuantity(item, 1)">+</button>
+            <button type="button" [disabled]="cancellingTransaction" [attr.aria-label]="'Add one ' + item.book.title + (isStudent ? ' to cart' : ' to bag')" (click)="changeQuantity(item, 1)">+</button>
           </div>
-          <button class="remove-from-bag" type="button" (click)="removeFromBag(item)">Remove item</button>
+          <button class="remove-from-bag" type="button" [disabled]="cancellingTransaction" (click)="removeFromBag(item)">Remove item</button>
         </div>
         <strong>{{ item.book.price * item.quantity | currency:'USD' }}</strong>
       </article>
     </div>
     <div class="bag-checkout" *ngIf="bag.length">
-      <div><span>Subtotal</span><strong>{{ bagTotal | currency:'USD' }}</strong></div>
+      <div><span>Subtotal</span><strong>{{ bagSubtotal | currency:'USD' }}</strong></div>
+      <div><span>Tax (8.25%, unless exempt)</span><strong>{{ bagTax | currency:'USD' }}</strong></div>
+      <div class="bag-total-row"><span>Total</span><strong>{{ bagTotal | currency:'USD' }}</strong></div>
       <div *ngIf="isStudent" class="payment-method" role="group" aria-label="Payment method">
-        <button type="button" [class.is-selected]="paymentMethod === 'cash'" [attr.aria-pressed]="paymentMethod === 'cash'" (click)="paymentMethod = 'cash'">Cash</button>
-        <button type="button" [class.is-selected]="paymentMethod === 'card'" [attr.aria-pressed]="paymentMethod === 'card'" (click)="paymentMethod = 'card'">Card</button>
+        <button type="button" [class.is-selected]="paymentMethod === 'cash'" [attr.aria-pressed]="paymentMethod === 'cash'" (click)="selectPaymentMethod('cash')">Cash</button>
+        <button type="button" [class.is-selected]="paymentMethod === 'card'" [attr.aria-pressed]="paymentMethod === 'card'" (click)="selectPaymentMethod('card')">Card</button>
       </div>
       <div *ngIf="isStudent && paymentMethod === 'cash'" class="cash-payment">
         <label for="cash-received">Cash received</label>
@@ -181,27 +237,106 @@
         <p *ngIf="cashReceived !== null && cashReceived < bagTotal" class="payment-error" role="alert">Amount received must cover the total.</p>
         <p *ngIf="cashReceived !== null && cashReceived >= bagTotal" class="change-due">Change due <strong>{{ changeDue | currency:'USD' }}</strong></p>
       </div>
-      <p *ngIf="isStudent && paymentMethod === 'card'" class="card-demo-note">Card checkout is a demo; no card details are collected and no real charge is made.</p>
-      <button *ngIf="isStudent" class="complete-payment" type="button" [disabled]="!canCompleteStudentSale || processingPayment" (click)="completeStudentSale()">
-        {{ processingPayment ? 'Processing payment...' : (paymentMethod === 'cash' ? 'Complete cash payment' : 'Complete card payment') }} <span>{{ bagTotal | currency:'USD' }}</span>
+      <button *ngIf="isStudent && paymentMethod === 'cash'" class="complete-payment" type="button" [disabled]="!canCompleteStudentSale || processingPayment || cancellingTransaction" (click)="completeStudentSale()">
+        {{ processingPayment ? 'Processing payment...' : 'Complete cash payment' }} <span>{{ bagTotal | currency:'USD' }}</span>
       </button>
       <button *ngIf="!isStudent" type="button" (click)="checkout()">Continue to checkout <span aria-hidden="true">↗</span></button>
-      <p *ngIf="checkoutMessage" role="status">{{ checkoutMessage }}</p>
+      <button *ngIf="isStudent" class="cancel-transaction" type="button" [disabled]="processingPayment || cancellingTransaction"
+        (click)="cancelStudentTransaction()">{{ cancellingTransaction ? 'Canceling transaction...' : 'Cancel transaction' }}</button>
+      <p *ngIf="checkoutMessage && !showCardDialog" role="status">{{ checkoutMessage }}</p>
     </div>
   </aside>
 
-    <button *ngIf="showBookEditor" class="manager-scrim" type="button" aria-label="Close book editor" (click)="closeBookEditor()"></button>
+  <button *ngIf="showCardDialog" class="card-dialog-scrim" type="button" aria-label="Close card payment" (click)="closeCardDialog()"></button>
+  <section *ngIf="showCardDialog" class="card-dialog" role="dialog" aria-modal="true" aria-labelledby="card-dialog-title">
+    <header class="receipt-header">
+      <div>
+        <p class="store-kicker">Demo card payment</p>
+        <h2 id="card-dialog-title">Enter card information</h2>
+      </div>
+      <button type="button" class="close-bag" aria-label="Close card payment" [disabled]="processingPayment" (click)="closeCardDialog()">×</button>
+    </header>
+    <div class="card-payment">
+      <label for="cardholder-name">Name on card</label>
+      <input id="cardholder-name" name="cardholderName" type="text" autocomplete="off" maxlength="60" required
+        [(ngModel)]="cardholderName" #cardholderNameField="ngModel"
+        [attr.aria-invalid]="(cardholderNameField.dirty || cardholderNameField.touched) && cardholderName.length > 0 && !cardholderNameIsValid"
+        aria-describedby="cardholder-name-error" />
+      <p *ngIf="(cardholderNameField.dirty || cardholderNameField.touched) && cardholderName.length > 0 && !cardholderNameIsValid"
+        id="cardholder-name-error" class="payment-error" role="alert">Name on card must not contain numbers.</p>
+      <label for="card-number">Card number</label>
+      <input id="card-number" name="cardNumber" type="text" inputmode="numeric" autocomplete="off" maxlength="16" required
+        [(ngModel)]="cardNumber" #cardNumberField="ngModel"
+        [attr.aria-invalid]="(cardNumberField.dirty || cardNumberField.touched) && cardNumber.length > 0 && !cardNumberIsValid"
+        aria-describedby="card-number-error" />
+      <p *ngIf="(cardNumberField.dirty || cardNumberField.touched) && cardNumber && !cardNumberHasOnlyDigits"
+        id="card-number-error" class="payment-error" role="alert">Card number must contain digits only.</p>
+      <div class="card-payment-row">
+        <div>
+          <span class="card-expiry-label">Expiry date</span>
+          <div class="card-expiry-selects">
+            <label class="visually-hidden" for="card-expiry-month">Expiry month</label>
+            <select id="card-expiry-month" name="cardExpiryMonth" autocomplete="off" [(ngModel)]="cardExpiryMonth"
+              [attr.aria-invalid]="cardExpiryIsPast || cardExpiryIsPartial" aria-describedby="card-expiry-error">
+              <option value="" disabled>Month</option>
+              <option *ngFor="let month of [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]" [value]="month.toString().padStart(2, '0')">
+                {{ month.toString().padStart(2, '0') }}
+              </option>
+            </select>
+            <label class="visually-hidden" for="card-expiry-year">Expiry year</label>
+            <select id="card-expiry-year" name="cardExpiryYear" autocomplete="off" [(ngModel)]="cardExpiryYear"
+              [attr.aria-invalid]="cardExpiryIsPast || cardExpiryIsPartial" aria-describedby="card-expiry-error">
+              <option value="" disabled>Year</option>
+              <option *ngFor="let year of cardExpiryYears" [value]="year">{{ year }}</option>
+            </select>
+          </div>
+          <p *ngIf="cardExpiryIsPast" id="card-expiry-error" class="payment-error" role="alert">
+            Expiry date has passed. Choose the current month or a later month.
+          </p>
+          <p *ngIf="cardCvvFocused && cardExpiryIsPartial" id="card-expiry-error" class="payment-error" role="alert">
+            Select both an expiry month and year.
+          </p>
+        </div>
+        <div>
+          <label for="card-cvv">CVV</label>
+          <input id="card-cvv" name="cardCvv" type="password" inputmode="numeric" autocomplete="off" maxlength="3" required
+            [(ngModel)]="cardCvv" #cardCvvField="ngModel"
+            (focus)="cardCvvFocused = true"
+            [attr.aria-invalid]="(cardCvvField.dirty || cardCvvField.touched) && cardCvv.length > 0 && !cardCvvIsValid"
+            aria-describedby="card-cvv-error" />
+          <p *ngIf="(cardCvvField.dirty || cardCvvField.touched) && cardCvv && !cardCvvHasOnlyDigits"
+            id="card-cvv-error" class="payment-error" role="alert">CVV must contain digits only.</p>
+          <p *ngIf="(cardCvvField.dirty || cardCvvField.touched) && cardCvvHasOnlyDigits && !cardCvvIsValid"
+            id="card-cvv-error" class="payment-error" role="alert">CVV must be exactly 3 digits.</p>
+        </div>
+      </div>
+    </div>
+    <p class="card-demo-note">Demo only: a number ending in 0000 simulates a decline. No real payment is processed; card details are not sent or saved.</p>
+    <p *ngIf="checkoutMessage" class="payment-error card-dialog-message" role="alert">{{ checkoutMessage }}</p>
+    <div class="card-dialog-total"><span>Subtotal</span><strong>{{ bagSubtotal | currency:'USD' }}</strong></div>
+    <div class="card-dialog-total"><span>Tax</span><strong>{{ bagTax | currency:'USD' }}</strong></div>
+    <div class="card-dialog-total card-dialog-grand-total"><span>Total</span><strong>{{ bagTotal | currency:'USD' }}</strong></div>
+    <div class="card-dialog-actions">
+      <button type="button" class="cancel-transaction" [disabled]="processingPayment || cancellingTransaction"
+        (click)="cancelStudentTransaction()">{{ cancellingTransaction ? 'Canceling...' : 'Cancel transaction' }}</button>
+      <button type="button" class="complete-payment" [disabled]="!canCompleteStudentSale || processingPayment || cancellingTransaction" (click)="completeStudentSale()">
+        {{ processingPayment ? 'Processing payment...' : 'Pay now' }} <span>{{ bagTotal | currency:'USD' }}</span>
+      </button>
+    </div>
+  </section>
+
+    <button *ngIf="showBookEditor" class="manager-scrim" type="button" aria-label="Close item editor" (click)="closeBookEditor()"></button>
     <section *ngIf="showBookEditor" class="manager-dialog" role="dialog" aria-modal="true" aria-labelledby="book-editor-title">
       <header class="manager-dialog-heading">
         <div>
           <p class="store-kicker">Catalog management</p>
-          <h2 id="book-editor-title">{{ editingBookId === null ? 'Add a book' : 'Edit book' }}</h2>
+          <h2 id="book-editor-title">{{ editingBookId === null ? 'Add an item' : 'Edit item' }}</h2>
         </div>
         <button type="button" class="close-bag" aria-label="Close book editor" (click)="closeBookEditor()">×</button>
       </header>
       <form class="book-editor-form" #bookForm="ngForm" (ngSubmit)="saveBook()">
-        <label>Title<input name="title" [(ngModel)]="bookDraft.title" required /></label>
-        <label>Author<input name="author" [(ngModel)]="bookDraft.author" /></label>
+        <label>Item name<input name="title" [(ngModel)]="bookDraft.title" required /></label>
+        <label>Author or brand <span class="optional-label">Optional</span><input name="author" [(ngModel)]="bookDraft.author" /></label>
         <div class="editor-fields-row">
           <label>Category
             <select name="category" [(ngModel)]="bookDraft.category" required>
@@ -214,12 +349,16 @@
           <label>Price<input name="price" type="number" min="0.01" step="0.01" [(ngModel)]="bookDraft.price" required /></label>
           <label>Stock quantity<input name="quantity" type="number" min="0" step="1" [(ngModel)]="bookDraft.quantity" required /></label>
         </div>
-        <label>ISBN<input name="isbn" inputmode="numeric" maxlength="13" [(ngModel)]="bookDraft.isbn" /></label>
+        <label class="tax-exemption-toggle editor-tax-toggle">
+          <input type="checkbox" name="taxExempt" [(ngModel)]="bookDraft.taxExempt" />
+          <span>Mark this item as tax-exempt</span>
+        </label>
+        <label>ISBN <span class="optional-label">For books only</span><input name="isbn" inputmode="numeric" maxlength="13" [(ngModel)]="bookDraft.isbn" /></label>
         <label>Badge <span class="optional-label">Optional</span><input name="badge" [(ngModel)]="bookDraft.badge" /></label>
         <p *ngIf="editorError" class="payment-error" role="alert">{{ editorError }}</p>
         <div class="book-editor-actions">
           <button type="button" class="editor-cancel" (click)="closeBookEditor()">Cancel</button>
-          <button type="submit" class="manager-primary" [disabled]="bookForm.invalid">{{ editingBookId === null ? 'Add book' : 'Save changes' }}</button>
+          <button type="submit" class="manager-primary" [disabled]="bookForm.invalid">{{ editingBookId === null ? 'Add item' : 'Save changes' }}</button>
         </div>
       </form>
     </section>
@@ -234,19 +373,24 @@
       <button type="button" class="close-bag" aria-label="Close receipt" (click)="closeReceipt()">×</button>
     </header>
     <p class="receipt-meta">Receipt {{ saleReceipt.number }} <span>{{ saleReceipt.issuedAt }}</span></p>
+    <p *ngIf="saleReceipt.paymentMethod === 'card'" class="card-demo-note">Demo card approved. No real charge was made.</p>
     <table class="receipt-table">
-      <thead><tr><th>Item</th><th>Qty</th><th>Each</th><th>Total</th></tr></thead>
+      <thead><tr><th>Item</th><th>Qty</th><th>Each</th><th>Subtotal</th><th>Tax</th><th>Total</th></tr></thead>
       <tbody>
         <tr *ngFor="let item of saleReceipt.items">
           <td>{{ item.title }}<small>{{ item.itemCode }}</small></td>
           <td>{{ item.quantity }}</td>
           <td>{{ item.unitPrice | currency:'USD' }}</td>
           <td>{{ item.lineTotal | currency:'USD' }}</td>
+          <td>{{ item.taxAmount | currency:'USD' }}</td>
+          <td>{{ item.totalWithTax | currency:'USD' }}</td>
         </tr>
       </tbody>
     </table>
     <dl class="receipt-total">
-      <div><dt>Total paid</dt><dd>{{ saleReceipt.total | currency:'USD' }}</dd></div>
+      <div><dt>Subtotal</dt><dd>{{ saleReceipt.subtotal | currency:'USD' }}</dd></div>
+      <div><dt>Tax</dt><dd>{{ saleReceipt.taxAmount | currency:'USD' }}</dd></div>
+      <div class="receipt-grand-total"><dt>Total paid</dt><dd>{{ saleReceipt.total | currency:'USD' }}</dd></div>
       <div><dt>Payment</dt><dd>{{ saleReceipt.paymentMethod === 'cash' ? 'Cash' : 'Card (demo)' }}</dd></div>
       <div *ngIf="saleReceipt.cashReceived !== undefined"><dt>Cash received</dt><dd>{{ saleReceipt.cashReceived | currency:'USD' }}</dd></div>
       <div *ngIf="saleReceipt.changeDue !== undefined"><dt>Change</dt><dd>{{ saleReceipt.changeDue | currency:'USD' }}</dd></div>

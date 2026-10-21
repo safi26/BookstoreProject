@@ -47,7 +47,7 @@ Item responses contain `item_id`, `item`, `item_quantity`, `item_price`, `author
 - There is no backend login/authentication endpoint. The login screen creates a demo session with a selected role and entered ID; passwords are not verified by Django.
 - A real numeric Django user ID is required for API-backed carts. Existing local development users can be inspected with `python3 manage.py shell` and Django's `get_user_model()`.
 - Student checkout is persisted by `/api/users/{user_id}/checkout/`: cash is validated and change is calculated on the server, stock is decremented transactionally, cart rows are cleared only on success, and receipt item details are snapshotted in the database.
-- Card checkout is a demo authorization only. There is no payment processor, no card data is collected, and no real charge is made. Keep this limitation visible; do not describe the endpoint as processing a real payment.
+- Card checkout is a demo authorization only. Cardholder name, number, expiry, and CVV are used transiently in the browser and are not sent to the API, stored, or charged. A card number ending in `0000` simulates a decline; other valid details are approved before the API records the card-demo sale. Keep this limitation visible; do not describe the endpoint as processing a real payment.
 
 ## Existing UI Conventions
 

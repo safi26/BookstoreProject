@@ -25,6 +25,7 @@
 
       <div class="manager-tools" *ngIf="isManager">
         <button class="manager-primary" type="button" (click)="openBookEditor()">Add item <span aria-hidden="true">+</span></button>
+        <button class="manager-secondary" type="button" (click)="openSalesHistory()">Sales history</button>
         <button class="manager-secondary" type="button" [disabled]="creatingCategory"
           (click)="showCategoryCreator = !showCategoryCreator; categoryError = ''">
           {{ showCategoryCreator ? 'Close category form' : 'Add category' }} <span aria-hidden="true">{{ showCategoryCreator ? '×' : '+' }}</span>
@@ -35,6 +36,12 @@
             <option>All items</option>
             <option *ngFor="let category of categories.slice(1)">{{ category }}</option>
           </select>
+        </label>
+        <label class="book-search">
+          <span aria-hidden="true">⌕</span>
+          <span class="visually-hidden">Search inventory</span>
+          <input type="search" name="inventorySearch" [(ngModel)]="searchTerm"
+            placeholder="Search item, code, or category" />
         </label>
         <label *ngIf="selectedCategory !== 'All items'" class="tax-exemption-toggle">
           <input type="checkbox" [checked]="selectedCategoryTaxExempt" [disabled]="taxExemptionUpdating"
@@ -133,7 +140,48 @@
       <p *ngIf="loading" class="empty-results" role="status">Loading the catalog...</p>
       <p *ngIf="apiError" class="empty-results" role="alert">{{ apiError }}</p>
       <p *ngIf="bagMessage" class="cart-feedback" role="status">{{ bagMessage }}</p>
-      <div class="book-grid" *ngIf="!loading && filteredBooks.length; else noBooks">
+      <details *ngIf="isManager && !loading && filteredBooks.length" class="inventory-view" open>
+        <summary class="inventory-heading">
+          <span id="inventory-title" class="inventory-title">Current inventory</span>
+          <span>{{ filteredBooks.length }} {{ filteredBooks.length === 1 ? 'item' : 'items' }}</span>
+        </summary>
+        <div class="inventory-table-wrap">
+          <table class="inventory-table">
+            <thead>
+              <tr><th scope="col">Item</th><th scope="col">Category</th><th scope="col">Item code</th>
+                <th scope="col">Price</th><th scope="col">In stock</th><th scope="col">Actions</th></tr>
+            </thead>
+            <tbody>
+              <tr *ngFor="let book of filteredBooks">
+                <th scope="row">
+                  <span class="inventory-item-name">{{ book.title }}</span>
+                  <span *ngIf="book.author" class="inventory-item-author">{{ book.author }}</span>
+                </th>
+                <td>{{ book.category }}</td>
+                <td>{{ book.itemCode }}</td>
+                <td>{{ book.price | currency:'USD' }}</td>
+                <td>
+                  <span class="inventory-stock" [class.is-out-of-stock]="book.quantity === 0">
+                    {{ book.quantity }} {{ book.quantity === 1 ? 'unit' : 'units' }}
+                  </span>
+                </td>
+                <td>
+                  <div class="manager-book-actions inventory-actions">
+                    <label class="tax-exemption-toggle item-tax-toggle">
+                      <input type="checkbox" [checked]="book.taxExempt" [disabled]="taxExemptionUpdating"
+                        (change)="setItemTaxExempt(book, $event)" />
+                      <span>Tax exempt</span>
+                    </label>
+                    <button type="button" (click)="openBookEditor(book)">Edit</button>
+                    <button type="button" (click)="removeBook(book)" [attr.aria-label]="'Remove ' + book.title">Remove</button>
+                  </div>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </details>
+      <div class="book-grid" *ngIf="!isManager && !loading && filteredBooks.length; else noBooks">
         <article class="book-item" *ngFor="let book of filteredBooks">
           <div class="book-cover-wrap">
             <span class="book-badge" *ngIf="book.badge">{{ book.badge }}</span>
@@ -362,6 +410,56 @@
         </div>
       </form>
     </section>
+
+  <button *ngIf="showSalesHistory" class="manager-scrim" type="button" aria-label="Close sales history" (click)="closeSalesHistory()"></button>
+  <section *ngIf="showSalesHistory" class="manager-dialog sales-history-dialog" role="dialog" aria-modal="true" aria-labelledby="sales-history-title">
+    <header class="manager-dialog-heading">
+      <div>
+        <p class="store-kicker">Completed transactions</p>
+        <h2 id="sales-history-title">Sales history</h2>
+      </div>
+      <button type="button" class="close-bag" aria-label="Close sales history" (click)="closeSalesHistory()">×</button>
+    </header>
+    <label class="sales-history-search">
+      <span>Find a receipt or item</span>
+      <input type="search" name="salesSearch" [(ngModel)]="salesSearch" placeholder="Receipt number, item name, or code" />
+    </label>
+    <p *ngIf="salesHistoryLoading" class="empty-results" role="status">Loading completed sales...</p>
+    <p *ngIf="salesHistoryError" class="empty-results" role="alert">{{ salesHistoryError }}</p>
+    <p *ngIf="!salesHistoryLoading && !salesHistoryError && !salesHistory.length" class="empty-results">
+      No completed sales yet.
+    </p>
+    <p *ngIf="!salesHistoryLoading && !salesHistoryError && salesHistory.length && !filteredSales.length" class="empty-results">
+      No sales match this search.
+    </p>
+    <article *ngFor="let sale of filteredSales" class="sales-history-record">
+      <header class="sales-record-heading">
+        <div>
+          <strong>Receipt {{ sale.number }}</strong>
+          <span>{{ sale.issuedAt }}</span>
+        </div>
+        <strong class="sales-record-total">{{ sale.total | currency:'USD' }}</strong>
+      </header>
+      <table class="receipt-table sales-history-table">
+        <thead><tr><th>Item</th><th>Qty</th><th>Each</th><th>Tax</th><th>Total</th></tr></thead>
+        <tbody>
+          <tr *ngFor="let item of sale.items">
+            <td>{{ item.title }}<small>{{ item.itemCode }}</small></td>
+            <td>{{ item.quantity }}</td>
+            <td>{{ item.unitPrice | currency:'USD' }}</td>
+            <td>{{ item.taxAmount | currency:'USD' }}</td>
+            <td>{{ item.totalWithTax | currency:'USD' }}</td>
+          </tr>
+        </tbody>
+      </table>
+      <p class="sales-record-payment">
+        {{ sale.paymentMethod === 'cash' ? 'Cash' : 'Card (demo)' }}
+        <span *ngIf="sale.cashReceived !== undefined">
+          · Received {{ sale.cashReceived | currency:'USD' }} · Change {{ sale.changeDue | currency:'USD' }}
+        </span>
+      </p>
+    </article>
+  </section>
 
   <button *ngIf="showReceipt" class="receipt-scrim" type="button" aria-label="Close receipt" (click)="closeReceipt()"></button>
   <section *ngIf="showReceipt && receipt as saleReceipt" class="receipt-dialog" role="dialog" aria-modal="true" aria-labelledby="receipt-title">

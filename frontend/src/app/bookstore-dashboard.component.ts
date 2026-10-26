@@ -104,6 +104,11 @@ export class BookstoreDashboardComponent {
   bagMessage = '';
   checkoutMessage = '';
   showBag = false;
+  showSalesHistory = false;
+  salesHistoryLoading = false;
+  salesHistoryError = '';
+  salesSearch = '';
+  salesHistory: SaleReceipt[] = [];
   paymentMethod: 'cash' | 'card' = 'cash';
   cashReceived: number | null = null;
   showCardDialog = false;
@@ -195,9 +200,23 @@ export class BookstoreDashboardComponent {
 
     return this.books.filter(book => {
       const matchesCategory = this.selectedCategory === 'All items' || book.category === this.selectedCategory;
-      const matchesSearch = !query || `${book.title} ${book.author} ${book.category}`.toLowerCase().includes(query);
+      const matchesSearch = !query ||
+        `${book.title} ${book.author} ${book.category} ${book.itemCode}`.toLowerCase().includes(query);
       return matchesCategory && matchesSearch;
     });
+  }
+
+  get filteredSales(): SaleReceipt[] {
+    const query = this.salesSearch.trim().toLowerCase();
+    if (!query) {
+      return this.salesHistory;
+    }
+
+    return this.salesHistory.filter(sale =>
+      `${sale.number} ${sale.issuedAt} ${sale.items.map(item => `${item.title} ${item.itemCode}`).join(' ')}`
+        .toLowerCase()
+        .includes(query)
+    );
   }
 
   get categoryPreviewBooks(): Book[] {
@@ -533,7 +552,21 @@ export class BookstoreDashboardComponent {
   }
 
   private finishStudentSale(receipt: ApiSaleReceipt): void {
-    this.receipt = {
+    this.receipt = this.toSaleReceipt(receipt);
+
+    this.bag = [];
+    this.cashReceived = null;
+    this.clearCardDetails();
+    this.showCardDialog = false;
+    this.paymentMethod = 'cash';
+    this.processingPayment = false;
+    this.showBag = false;
+    this.showReceipt = true;
+    this.loadCatalog();
+  }
+
+  private toSaleReceipt(receipt: ApiSaleReceipt): SaleReceipt {
+    return {
       number: receipt.receipt_number,
       issuedAt: new Date(receipt.issued_at).toLocaleString(),
       items: receipt.items.map(item => ({
@@ -553,16 +586,31 @@ export class BookstoreDashboardComponent {
         ? { cashReceived: Number(receipt.cash_received), changeDue: Number(receipt.change_due) }
         : {})
     };
+  }
 
-    this.bag = [];
-    this.cashReceived = null;
-    this.clearCardDetails();
-    this.showCardDialog = false;
-    this.paymentMethod = 'cash';
-    this.processingPayment = false;
-    this.showBag = false;
-    this.showReceipt = true;
-    this.loadCatalog();
+  openSalesHistory(): void {
+    if (!this.isManager || this.salesHistoryLoading) {
+      return;
+    }
+
+    this.showSalesHistory = true;
+    this.salesHistoryLoading = true;
+    this.salesHistoryError = '';
+    this.storeApi.getSales().subscribe({
+      next: sales => {
+        this.salesHistory = sales.map(sale => this.toSaleReceipt(sale));
+        this.salesHistoryLoading = false;
+      },
+      error: error => {
+        this.salesHistoryError = this.getApiError(error, 'Could not load sales history.');
+        this.salesHistoryLoading = false;
+      }
+    });
+  }
+
+  closeSalesHistory(): void {
+    this.showSalesHistory = false;
+    this.salesSearch = '';
   }
 
   closeReceipt(): void {

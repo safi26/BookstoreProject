@@ -48,6 +48,38 @@ class CheckoutApiTests(APITestCase):
 		self.assertEqual(self.item.item_quantity, 6)
 		self.assertEqual(CartItem.objects.count(), 0)
 
+	def test_adding_item_to_cart_does_not_reduce_inventory(self):
+		response = self.client.post(
+			f"/api/users/{self.user.pk}/cart/items/",
+			{"item": self.item.item_id, "quantity": 1},
+			format="json",
+		)
+
+		self.assertEqual(response.status_code, 200)
+		self.item.refresh_from_db()
+		self.assertEqual(self.item.item_quantity, 8)
+		self.assertEqual(CartItem.objects.get(item=self.item).quantity, 3)
+
+	def test_sales_history_can_list_and_retrieve_completed_receipts(self):
+		checkout_response = self.client.post(
+			self.url,
+			{"payment_method": "cash", "cash_received": "30.00"},
+			format="json",
+		)
+		receipt_number = checkout_response.data["receipt_number"]
+
+		list_response = self.client.get("/api/sales/")
+		detail_response = self.client.get(f"/api/sales/{receipt_number}/")
+
+		self.assertEqual(list_response.status_code, 200)
+		self.assertEqual(detail_response.status_code, 200)
+		self.assertEqual(list_response.data[0]["receipt_number"], receipt_number)
+		self.assertEqual(detail_response.data["receipt_number"], receipt_number)
+		self.assertTrue(detail_response.data["issued_at"])
+		self.assertEqual(detail_response.data["total"], "27.06")
+		self.assertEqual(detail_response.data["items"][0]["item_name"], "Test Book")
+		self.assertEqual(detail_response.data["items"][0]["quantity"], 2)
+
 	def test_receipt_breaks_tax_down_per_taxable_and_exempt_item(self):
 		category = self.item.category
 		taxable_item = Item.objects.create(

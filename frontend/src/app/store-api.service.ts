@@ -156,4 +156,12 @@ export class StoreApiService {
   checkout(userId: number, payload: CheckoutPayload): Observable<ApiSaleReceipt> {
     return this.http.post<ApiSaleReceipt>(`${this.apiUrl}/users/${userId}/checkout/`, payload);
   }
+
+  getSales(): Observable<ApiSaleReceipt[]> {
+    return this.http.get<ApiSaleReceipt[]>(`${this.apiUrl}/sales/`);
+  }
+
+  getSale(receiptNumber: string): Observable<ApiSaleReceipt> {
+    return this.http.get<ApiSaleReceipt>(`${this.apiUrl}/sales/${encodeURIComponent(receiptNumber)}/`);
+  }
 }

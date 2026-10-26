@@ -48,6 +48,17 @@ class ItemViewSet(viewsets.ModelViewSet):
     serializer_class = ItemSerializer
 
 
+class SaleViewSet(viewsets.ReadOnlyModelViewSet):
+    queryset = (
+        Sale.objects
+        .prefetch_related("sale_items")
+        .all()
+        .order_by("-created_at", "-pk")
+    )
+    serializer_class = SaleReceiptSerializer
+    lookup_field = "receipt_number"
+
+
 class CartView(APIView):
 
     def get(self, request, user_id):

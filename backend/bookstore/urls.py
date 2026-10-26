@@ -4,6 +4,7 @@ from rest_framework.routers import DefaultRouter
 from .views import (
     CategoryViewSet,
     ItemViewSet,
+    SaleViewSet,
     CartView,
     CartItemCreateView,
     CartItemDetailView,
@@ -23,6 +24,12 @@ router.register(
     "items",
     ItemViewSet,
     basename="item",
+)
+
+router.register(
+    "sales",
+    SaleViewSet,
+    basename="sale",
 )
 
 

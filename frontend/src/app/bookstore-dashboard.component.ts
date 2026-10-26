@@ -236,14 +236,25 @@ export class BookstoreDashboardComponent {
   }
 
   get matchingItemCodes(): Book[] {
-    const query = this.itemCodeQuery.trim().toUpperCase();
+    const query = this.itemCodeQuery.trim().toLowerCase();
     if (!this.isStudent || !query || this.itemCodeSuggestionSelected) {
       return [];
     }
 
     return this.books
-      .filter(book => book.itemCode.toUpperCase().startsWith(query))
+      .filter(book =>
+        book.itemCode.toLowerCase().startsWith(query) ||
+        book.title.toLowerCase().includes(query)
+      )
       .slice(0, 6);
+  }
+
+  get hasNoItemSearchMatches(): boolean {
+    return this.isStudent &&
+      !this.loading &&
+      !!this.itemCodeQuery.trim() &&
+      !this.itemCodeSuggestionSelected &&
+      !this.matchingItemCodes.length;
   }
 
   get activeItemCodeSuggestionId(): string | null {
@@ -361,11 +372,22 @@ export class BookstoreDashboardComponent {
       return;
     }
 
-    const code = this.itemCodeQuery.trim().toUpperCase();
-    const book = this.books.find(item => item.itemCode.toUpperCase() === code);
+    const query = this.itemCodeQuery.trim();
+    const normalizedQuery = query.toLowerCase();
+    const matches = this.matchingItemCodes;
+    const book =
+      this.books.find(item => item.itemCode.toLowerCase() === normalizedQuery) ??
+      this.books.find(item => item.title.toLowerCase() === normalizedQuery) ??
+      (matches.length === 1 ? matches[0] : undefined);
 
     if (!book) {
-      this.itemCodeMessage = code ? `No item found for code ${code}.` : 'Enter an item code.';
+      if (!query) {
+        this.itemCodeMessage = 'Enter an item name or code.';
+      } else if (matches.length > 1) {
+        this.itemCodeMessage = 'Several items match. Pick one from the list.';
+      } else {
+        this.itemCodeMessage = `No item found for "${query}".`;
+      }
       return;
     }
 

@@ -89,7 +89,7 @@
         <label *ngIf="!isStudent" class="book-search">
           <span aria-hidden="true">⌕</span>
           <span class="visually-hidden">Search items</span>
-          <input type="search" name="bookSearch" [(ngModel)]="searchTerm" placeholder="Item name, author, or category" />
+          <input type="search" name="bookSearch" [(ngModel)]="searchTerm" placeholder="Item name, code, author, or category" />
         </label>
       </div>
 
@@ -116,20 +116,23 @@
       </section>
 
       <form *ngIf="isStudent" class="item-code-entry" (ngSubmit)="addByItemCode()">
-        <label for="student-item-code">Add by item code</label>
+        <label for="student-item-code">Search by item name or code</label>
         <div class="item-code-control">
           <div class="item-code-input-wrap">
-            <input id="student-item-code" name="itemCodeQuery" [(ngModel)]="itemCodeQuery" placeholder="Enter item code" autocomplete="off"
+            <input id="student-item-code" name="itemCodeQuery" [(ngModel)]="itemCodeQuery" placeholder="Enter item name or code" autocomplete="off"
               role="combobox" aria-autocomplete="list" aria-controls="item-code-suggestions"
               [attr.aria-expanded]="matchingItemCodes.length > 0"
               [attr.aria-activedescendant]="activeItemCodeSuggestionId"
               (ngModelChange)="onItemCodeQueryChange()"
               (keydown)="handleItemCodeKeydown($event)" />
-            <div *ngIf="matchingItemCodes.length" id="item-code-suggestions" class="item-code-suggestions" role="listbox" aria-label="Matching item codes">
+            <div *ngIf="matchingItemCodes.length" id="item-code-suggestions" class="item-code-suggestions" role="listbox" aria-label="Matching items">
               <button *ngFor="let book of matchingItemCodes; let index = index" [id]="'item-code-option-' + book.id" type="button" role="option"
                 [class.is-active]="activeItemCodeIndex === index" [attr.aria-selected]="activeItemCodeIndex === index" (click)="selectItemCode(book)">
                 <strong>{{ book.itemCode }}</strong><span>{{ book.title }}</span>
               </button>
+            </div>
+            <div *ngIf="hasNoItemSearchMatches" class="item-code-suggestions" role="status">
+              <p class="item-code-no-results">No items found</p>
             </div>
           </div>
           <button class="student-action" type="submit">Add to cart</button>
@@ -216,7 +219,7 @@
           </div>
         </article>
       </div>
-      <ng-template #noBooks><p *ngIf="!loading && !apiError" class="empty-results">No items found. Try another name or category.</p></ng-template>
+      <ng-template #noBooks><p *ngIf="!loading && !apiError && !filteredBooks.length" class="empty-results">No items found. Try another name or category.</p></ng-template>
     </section>
 
     <section class="our-story" id="our-story" aria-labelledby="story-title">

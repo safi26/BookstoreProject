@@ -21,17 +21,25 @@ The root URL configuration exposes:
 | Method | Endpoint | Behavior |
 |---|---|---|
 | GET, POST | `/api/categories/` | List or create categories (`category_name`) |
-| GET, PUT, PATCH, DELETE | `/api/categories/{category_id}/` | Retrieve or modify a category |
+| GET, PUT, PATCH, DELETE | `/api/categories/{category_id}/` | Retrieve or modify a category, including tax exemption and its holiday discount |
 | GET, POST | `/api/items/` | List or create items |
 | GET, PUT, PATCH, DELETE | `/api/items/{item_id}/` | Retrieve or modify an item |
+| GET, POST | `/api/items/{item_id}/variants/` | List or add an apparel size/color variant and its stock |
+| GET, PATCH, DELETE | `/api/items/{item_id}/variants/{variant_id}/` | Retrieve, update, or remove a variant |
+| POST | `/api/auth/login/` | Authenticate `{ "user_id": id, "password": "..." }`; returns a token and server-derived role |
+| POST | `/api/auth/logout/` | Revoke the authenticated token |
 | GET, DELETE | `/api/users/{user_id}/cart/` | Read or clear a user's cart |
-| POST | `/api/users/{user_id}/cart/items/` | Add `{ "item": item_id, "quantity": 1 }` |
+| POST | `/api/users/{user_id}/cart/items/` | Add `{ "item": item_id, "quantity": 1 }`; apparel also requires `variant_id` |
 | PATCH, DELETE | `/api/users/{user_id}/cart/items/{cart_item_id}/` | Set quantity with `{ "quantity": n }`, or remove the line |
-| POST | `/api/users/{user_id}/checkout/` | Complete cash or demo-card checkout; returns and persists the itemized receipt |
+| POST | `/api/users/{user_id}/checkout/` | Complete cash or demo-card checkout and return/persist the itemized receipt; rejects client-supplied discounts |
 | GET | `/api/schema/` | OpenAPI schema |
 | GET | `/api/docs/`, `/api/redoc/` | Swagger UI and ReDoc |
 
 Item responses contain `item_id`, `item`, `item_quantity`, `item_price`, `author`, `item_code`, `isbn`, `badge`, `cover_url`, `category` (the category ID), and `category_name`. Category is the only shelf/filter classification; there is no separate catalog field. `cover_url` prefers the item's stored URL and otherwise derives an Open Library cover URL from ISBN. Cart responses use `cart_items`, `total_items`, and `total_price`; each cart line includes an `item_details` object matching the full item response. Prices are serialized as decimal strings on item fields; calculated totals may be JSON numbers.
+
+Apparel item responses also include `variants: [{ "variant_id": id, "size": "M", "color": "Blue", "quantity": 4 }]`. Supported sizes are XS, S, M, L, XL, and XXL; supported colors are Blue, Green, Black, Grey, and Red. Each size/color combination has independent stock. Cart additions for apparel require `variant_id`; cart lines and receipt items snapshot the selected size and color. The item's `item_quantity` is the aggregate across its variants. Existing apparel stock is migrated into an `Unspecified` size/color variant; new apparel should have variants created through the nested endpoint.
+
+Only managers can configure category-level percent-off or dollar-off discounts. They automatically apply to all items in the category, are capped at each line subtotal, and tax is calculated after discount. Students cannot submit or override discounts during checkout. Receipts persist `discount_total` and each line's effective discount type, value, and amount.
 
 ## Frontend Integration Rules
 
@@ -39,14 +47,14 @@ Item responses contain `item_id`, `item`, `item_quantity`, `item_price`, `author
 2. Load the catalog from categories and items; do not restore the removed hard-coded catalog or browser-local catalog persistence.
 3. Convert backend fields at the dashboard boundary. The API stores author, item code, ISBN, badge, and optional cover URL. Use category as the sole classification; do not reintroduce a separate catalog property or selector. The UI uses a designed fallback when a cover URL is absent or unavailable.
 4. Item create/update payloads contain `item`, `item_quantity`, `item_price`, `author`, `item_code`, `isbn`, `badge`, and a numeric `category` ID. `cover_url` is read-only through the current item serializer. Category selection maps names to IDs from the category endpoint.
-5. Cart endpoints require a numeric Django user primary key. `AuthService` persists the entered demo ID in session storage and exposes `currentUserId` only when it is a positive integer. Cart contents live in Django keyed by that user ID; signing out clears the browser session but not the cart. Re-enter the same Django user ID at the next demo login to restore cart lines and their nested item details. Refresh cart state after successful mutations; surface API errors instead of silently reverting to a local-only cart.
-6. The current frontend role check is a presentation guard, not server-side authorization. Do not treat it as a security boundary.
+5. Login verifies a numeric Django user primary key and password at `/api/auth/login/`; the backend derives Manager from `is_staff`, `is_superuser`, or membership in the `Manager` group, and treats other authenticated users as Students. The token is sent in the `Authorization: Token ...` header and revoked on logout. Login is limited to 10 attempts per minute.
+6. Cart endpoints require the authenticated user's numeric Django primary key. `AuthService` persists the server-returned user ID and token in session storage and exposes `currentUserId` only when it is a positive integer. The backend enforces cart ownership, manager-only catalog mutations and sales history, and public read-only catalog access. Frontend role checks are presentation guards only; server permissions are authoritative.
+7. Cart contents live in Django keyed by that user ID; signing out clears the browser session but not the cart. Re-enter the same Django user ID at the next login to restore cart lines and their nested item details. Refresh cart state after successful mutations; surface API errors instead of silently reverting to a local-only cart.
 
 ## Authentication And Checkout Limits
 
-- There is no backend login/authentication endpoint. The login screen creates a demo session with a selected role and entered ID; passwords are not verified by Django.
-- A real numeric Django user ID is required for API-backed carts. Existing local development users can be inspected with `python3 manage.py shell` and Django's `get_user_model()`.
-- Student checkout is persisted by `/api/users/{user_id}/checkout/`: cash is validated and change is calculated on the server, stock is decremented transactionally, cart rows are cleared only on success, and receipt item details are snapshotted in the database.
+- Login uses Django's user ID and password; create local accounts through Django admin or `createsuperuser`, and run `python3 manage.py migrate` to install token-auth tables.
+- Student checkout is persisted by `/api/users/{user_id}/checkout/`: manager-configured category discounts are applied before tax, cash is validated and change is calculated on the server, stock is decremented transactionally, cart rows are cleared only on success, and receipt item details are snapshotted in the database.
 - Card checkout is a demo authorization only. Cardholder name, number, expiry, and CVV are used transiently in the browser and are not sent to the API, stored, or charged. A card number ending in `0000` simulates a decline; other valid details are approved before the API records the card-demo sale. Keep this limitation visible; do not describe the endpoint as processing a real payment.
 
 ## Existing UI Conventions

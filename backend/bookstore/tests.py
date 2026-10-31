@@ -12,6 +12,7 @@ class CheckoutApiTests(APITestCase):
 			username="checkout-student",
 			password="test-password",
 		)
+		self.client.force_authenticate(user=self.user)
 		category = Category.objects.create(category_name="Fiction")
 		self.item = Item.objects.create(
 			item="Test Book",
@@ -48,6 +49,138 @@ class CheckoutApiTests(APITestCase):
 		self.assertEqual(self.item.item_quantity, 6)
 		self.assertEqual(CartItem.objects.count(), 0)
 
+	def test_percent_discount_is_applied_before_tax_and_saved_to_receipt(self):
+		self.item.category.discount_type = "percent"
+		self.item.category.discount_value = Decimal("10.00")
+		self.item.category.save(update_fields=["discount_type", "discount_value"])
+		response = self.client.post(
+			self.url,
+			{
+				"payment_method": "cash",
+				"cash_received": "24.36",
+			},
+			format="json",
+		)
+
+		self.assertEqual(response.status_code, 201)
+		self.assertEqual(response.data["discount_total"], "2.50")
+		self.assertEqual(response.data["subtotal"], "22.50")
+		self.assertEqual(response.data["tax_amount"], "1.86")
+		self.assertEqual(response.data["total"], "24.36")
+		receipt_item = response.data["items"][0]
+		self.assertEqual(receipt_item["discount_type"], "percent")
+		self.assertEqual(receipt_item["discount_value"], "10.00")
+		self.assertEqual(receipt_item["discount_amount"], "2.50")
+		self.assertEqual(receipt_item["line_total"], "22.50")
+		sale_item = SaleItem.objects.get()
+		self.assertEqual(sale_item.discount_amount, Decimal("2.50"))
+		self.assertEqual(sale_item.tax_amount, Decimal("1.86"))
+
+	def test_student_cannot_submit_checkout_discounts(self):
+		self.item.category.discount_type = "percent"
+		self.item.category.discount_value = Decimal("20.00")
+		self.item.category.save(update_fields=["discount_type", "discount_value"])
+		cart_item = CartItem.objects.get(item=self.item)
+		response = self.client.post(
+			self.url,
+			{
+				"payment_method": "card",
+				"discounts": [{
+					"cart_item_id": cart_item.pk,
+					"discount_type": "dollar",
+					"discount_value": "25.00",
+				}],
+			},
+			format="json",
+		)
+
+		self.assertEqual(response.status_code, 400)
+		self.assertEqual(Sale.objects.count(), 0)
+		self.assertEqual(CartItem.objects.get().quantity, 2)
+
+	def test_different_category_discounts_apply_to_their_own_items(self):
+		second_category = Category.objects.create(
+			category_name="Supplies",
+			discount_type="dollar",
+			discount_value=Decimal("2.00"),
+		)
+		second_item = Item.objects.create(
+			item="Second Item",
+			item_quantity=5,
+			item_price=Decimal("10.00"),
+			category=second_category,
+		)
+		cart = Cart.objects.get(user=self.user)
+		CartItem.objects.create(cart=cart, item=second_item, quantity=1)
+		self.item.category.discount_type = "percent"
+		self.item.category.discount_value = Decimal("10.00")
+		self.item.category.save(update_fields=["discount_type", "discount_value"])
+
+		response = self.client.post(
+			self.url,
+			{"payment_method": "card"},
+			format="json",
+		)
+
+		self.assertEqual(response.status_code, 201)
+		self.assertEqual(response.data["discount_total"], "4.50")
+		self.assertEqual(response.data["subtotal"], "30.50")
+		receipt_items = {
+			receipt_item["item_name"]: receipt_item
+			for receipt_item in response.data["items"]
+		}
+		self.assertEqual(receipt_items["Test Book"]["discount_amount"], "2.50")
+		self.assertEqual(receipt_items["Second Item"]["discount_amount"], "2.00")
+
+	def test_dollar_discount_is_capped_at_line_total(self):
+		self.item.category.discount_type = "dollar"
+		self.item.category.discount_value = Decimal("30.00")
+		self.item.category.save(update_fields=["discount_type", "discount_value"])
+		response = self.client.post(
+			self.url,
+			{"payment_method": "cash", "cash_received": "0.00"},
+			format="json",
+		)
+
+		self.assertEqual(response.status_code, 201)
+		self.assertEqual(response.data["discount_total"], "25.00")
+		self.assertEqual(response.data["subtotal"], "0.00")
+		self.assertEqual(response.data["tax_amount"], "0.00")
+		self.assertEqual(response.data["total"], "0.00")
+		self.assertEqual(response.data["items"][0]["discount_amount"], "25.00")
+		self.assertEqual(response.data["items"][0]["line_total"], "0.00")
+
+	def test_dollar_discount_is_applied_before_tax(self):
+		self.item.category.discount_type = "dollar"
+		self.item.category.discount_value = Decimal("5.00")
+		self.item.category.save(update_fields=["discount_type", "discount_value"])
+		response = self.client.post(
+			self.url,
+			{"payment_method": "cash", "cash_received": "21.65"},
+			format="json",
+		)
+
+		self.assertEqual(response.status_code, 201)
+		self.assertEqual(response.data["discount_total"], "5.00")
+		self.assertEqual(response.data["subtotal"], "20.00")
+		self.assertEqual(response.data["tax_amount"], "1.65")
+		self.assertEqual(response.data["total"], "21.65")
+		self.assertEqual(response.data["items"][0]["line_total"], "20.00")
+
+	def test_checkout_rejects_client_supplied_discounts(self):
+		response = self.client.post(
+			self.url,
+			{
+				"payment_method": "card",
+				"discounts": [],
+			},
+			format="json",
+		)
+
+		self.assertEqual(response.status_code, 400)
+		self.assertEqual(Sale.objects.count(), 0)
+		self.assertEqual(CartItem.objects.get().quantity, 2)
+
 	def test_adding_item_to_cart_does_not_reduce_inventory(self):
 		response = self.client.post(
 			f"/api/users/{self.user.pk}/cart/items/",
@@ -60,6 +193,20 @@ class CheckoutApiTests(APITestCase):
 		self.assertEqual(self.item.item_quantity, 8)
 		self.assertEqual(CartItem.objects.get(item=self.item).quantity, 3)
 
+	def test_user_cannot_access_another_users_cart_or_checkout(self):
+		other_user = get_user_model().objects.create_user(username="other-student")
+		self.client.force_authenticate(user=other_user)
+
+		cart_response = self.client.get(f"/api/users/{self.user.pk}/cart/")
+		checkout_response = self.client.post(
+			self.url,
+			{"payment_method": "card"},
+			format="json",
+		)
+
+		self.assertEqual(cart_response.status_code, 403)
+		self.assertEqual(checkout_response.status_code, 403)
+
 	def test_sales_history_can_list_and_retrieve_completed_receipts(self):
 		checkout_response = self.client.post(
 			self.url,
@@ -68,6 +215,12 @@ class CheckoutApiTests(APITestCase):
 		)
 		receipt_number = checkout_response.data["receipt_number"]
 
+		manager = get_user_model().objects.create_user(
+			username="sales-history-manager",
+			password="test-manager-password",
+			is_staff=True,
+		)
+		self.client.force_authenticate(user=manager)
 		list_response = self.client.get("/api/sales/")
 		detail_response = self.client.get(f"/api/sales/{receipt_number}/")
 

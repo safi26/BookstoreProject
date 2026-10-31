@@ -1,9 +1,6 @@
 from django.contrib import admin
 from .models import Category, Item
-
-
-def is_manager(user):
-    return user.is_superuser or user.groups.filter(name="Manager").exists()
+from .permissions import is_manager
 
 
 @admin.register(Category)

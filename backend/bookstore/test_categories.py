@@ -1,9 +1,19 @@
+from django.contrib.auth import get_user_model
+from django.contrib.auth.models import Group
 from rest_framework.test import APITestCase
 
 from .models import Category, Item
 
 
 class StoreCategoryDefaultsApiTests(APITestCase):
+    def setUp(self):
+        manager = get_user_model().objects.create_user(
+            username="category-manager",
+            password="test-manager-password",
+            is_staff=True,
+        )
+        self.client.force_authenticate(user=manager)
+
     def test_default_store_categories_are_available(self):
         response = self.client.get("/api/categories/")
 
@@ -40,6 +50,90 @@ class StoreCategoryDefaultsApiTests(APITestCase):
         )
         self.assertEqual(disabled.status_code, 200)
         self.assertFalse(disabled.data["tax_exempt"])
+
+    def test_anonymous_user_cannot_modify_categories(self):
+        category = Category.objects.create(category_name="Protected category")
+        self.client.force_authenticate(user=None)
+
+        response = self.client.patch(
+            f"/api/categories/{category.category_id}/",
+            {"tax_exempt": True},
+            format="json",
+        )
+
+        self.assertIn(response.status_code, (401, 403))
+        category.refresh_from_db()
+        self.assertFalse(category.tax_exempt)
+
+    def test_non_manager_cannot_modify_categories(self):
+        student = get_user_model().objects.create_user(
+            username="category-student",
+            password="test-student-password",
+        )
+        self.client.force_authenticate(user=student)
+        category = Category.objects.create(category_name="Protected category")
+
+        response = self.client.patch(
+            f"/api/categories/{category.category_id}/",
+            {"tax_exempt": True},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 403)
+        category.refresh_from_db()
+        self.assertFalse(category.tax_exempt)
+
+    def test_manager_group_can_modify_categories(self):
+        manager_group, _ = Group.objects.get_or_create(name="Manager")
+        manager = get_user_model().objects.create_user(
+            username="group-manager",
+            password="test-manager-password",
+        )
+        manager.groups.add(manager_group)
+        self.client.force_authenticate(user=manager)
+        category = Category.objects.create(category_name="Managed category")
+
+        response = self.client.patch(
+            f"/api/categories/{category.category_id}/",
+            {"discount_type": "percent", "discount_value": "10.00"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["discount_type"], "percent")
+
+    def test_category_discount_can_be_configured_and_cleared(self):
+        category = Category.objects.create(category_name="Holiday gifts")
+
+        configured = self.client.patch(
+            f"/api/categories/{category.category_id}/",
+            {"discount_type": "percent", "discount_value": "15.00"},
+            format="json",
+        )
+        self.assertEqual(configured.status_code, 200)
+        self.assertEqual(configured.data["discount_type"], "percent")
+        self.assertEqual(configured.data["discount_value"], "15.00")
+
+        cleared = self.client.patch(
+            f"/api/categories/{category.category_id}/",
+            {"discount_type": "none", "discount_value": "0.00"},
+            format="json",
+        )
+        self.assertEqual(cleared.status_code, 200)
+        self.assertEqual(cleared.data["discount_type"], "none")
+
+    def test_category_percent_discount_cannot_exceed_one_hundred_percent(self):
+        category = Category.objects.create(category_name="Holiday gifts")
+
+        response = self.client.patch(
+            f"/api/categories/{category.category_id}/",
+            {"discount_type": "percent", "discount_value": "100.01"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 400)
+        category.refresh_from_db()
+        self.assertEqual(category.discount_type, "none")
 
     def test_category_can_be_created_through_api(self):
         response = self.client.post(

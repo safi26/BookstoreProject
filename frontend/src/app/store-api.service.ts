@@ -6,6 +6,15 @@ export interface ApiCategory {
   category_id: number;
   category_name: string;
   tax_exempt: boolean;
+  discount_type: 'none' | 'percent' | 'dollar';
+  discount_value: string;
+}
+
+export interface ApiItemVariant {
+  variant_id: number;
+  size: 'XS' | 'S' | 'M' | 'L' | 'XL' | 'XXL' | 'Unspecified';
+  color: 'Blue' | 'Green' | 'Black' | 'Grey' | 'Red' | 'Unspecified';
+  quantity: number;
 }
 
 export interface ApiItem {
@@ -21,11 +30,15 @@ export interface ApiItem {
   category_name: string;
   cover_url: string;
   tax_exempt: boolean;
+  variants: ApiItemVariant[];
 }
 
 export interface ApiCartItem {
   id: number;
   item: number;
+  variant_id: number | null;
+  variant_size: string | null;
+  variant_color: string | null;
   item_details: ApiItem;
   item_name: string;
   item_price: string;
@@ -48,8 +61,13 @@ export interface ApiCart {
 export interface ApiSaleItem {
   item_name: string;
   item_code: string;
+  variant_size: string;
+  variant_color: string;
   quantity: number;
   unit_price: string;
+  discount_type: 'none' | 'percent' | 'dollar';
+  discount_value: string;
+  discount_amount: string;
   line_total: string;
   tax_amount: string;
 }
@@ -59,6 +77,7 @@ export interface ApiSaleReceipt {
   issued_at: string;
   items: ApiSaleItem[];
   subtotal: string;
+  discount_total: string;
   tax_amount: string;
   total: string;
   payment_method: 'cash' | 'card';
@@ -69,6 +88,12 @@ export interface ApiSaleReceipt {
 export interface CheckoutPayload {
   payment_method: 'cash' | 'card';
   cash_received?: string;
+}
+
+export interface ApiLoginResponse {
+  token: string;
+  user_id: number;
+  role: 'Student' | 'Manager';
 }
 
 export interface ItemPayload {
@@ -83,10 +108,27 @@ export interface ItemPayload {
   tax_exempt: boolean;
 }
 
+export interface ItemVariantPayload {
+  size: ApiItemVariant['size'];
+  color: string;
+  quantity: number;
+}
+
 @Injectable({ providedIn: 'root' })
 export class StoreApiService {
   private readonly http = inject(HttpClient);
   private readonly apiUrl = '/api';
+
+  login(userId: number, password: string): Observable<ApiLoginResponse> {
+    return this.http.post<ApiLoginResponse>(`${this.apiUrl}/auth/login/`, {
+      user_id: userId,
+      password
+    });
+  }
+
+  logout(): Observable<void> {
+    return this.http.post<void>(`${this.apiUrl}/auth/logout/`, {});
+  }
 
   getCategories(): Observable<ApiCategory[]> {
     return this.http.get<ApiCategory[]>(`${this.apiUrl}/categories/`);
@@ -105,6 +147,17 @@ export class StoreApiService {
   updateCategoryTaxExemption(categoryId: number, taxExempt: boolean): Observable<ApiCategory> {
     return this.http.patch<ApiCategory>(`${this.apiUrl}/categories/${categoryId}/`, {
       tax_exempt: taxExempt
+    });
+  }
+
+  updateCategoryDiscount(
+    categoryId: number,
+    discountType: 'none' | 'percent' | 'dollar',
+    discountValue: number
+  ): Observable<ApiCategory> {
+    return this.http.patch<ApiCategory>(`${this.apiUrl}/categories/${categoryId}/`, {
+      discount_type: discountType,
+      discount_value: discountValue
     });
   }
 
@@ -130,14 +183,39 @@ export class StoreApiService {
     return this.http.delete<void>(`${this.apiUrl}/items/${itemId}/`);
   }
 
+  createItemVariant(itemId: number, payload: ItemVariantPayload): Observable<ApiItemVariant> {
+    return this.http.post<ApiItemVariant>(`${this.apiUrl}/items/${itemId}/variants/`, payload);
+  }
+
+  updateItemVariant(
+    itemId: number,
+    variantId: number,
+    payload: ItemVariantPayload
+  ): Observable<ApiItemVariant> {
+    return this.http.patch<ApiItemVariant>(
+      `${this.apiUrl}/items/${itemId}/variants/${variantId}/`,
+      payload
+    );
+  }
+
+  deleteItemVariant(itemId: number, variantId: number): Observable<void> {
+    return this.http.delete<void>(`${this.apiUrl}/items/${itemId}/variants/${variantId}/`);
+  }
+
   getCart(userId: number): Observable<ApiCart> {
     return this.http.get<ApiCart>(`${this.apiUrl}/users/${userId}/cart/`);
   }
 
-  addCartItem(userId: number, itemId: number, quantity = 1): Observable<ApiCartItem> {
+  addCartItem(
+    userId: number,
+    itemId: number,
+    quantity = 1,
+    variantId?: number
+  ): Observable<ApiCartItem> {
     return this.http.post<ApiCartItem>(`${this.apiUrl}/users/${userId}/cart/items/`, {
       item: itemId,
-      quantity
+      quantity,
+      ...(variantId !== undefined ? { variant_id: variantId } : {})
     });
   }
 

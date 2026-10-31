@@ -1,6 +1,8 @@
+from decimal import Decimal
+
 from rest_framework import serializers
 
-from .models import Category, Item, Cart, CartItem, Sale, SaleItem
+from .models import Category, Item, ItemVariant, Cart, CartItem, Sale, SaleItem
 from .tax import calculate_line_tax
 
 
@@ -11,7 +13,66 @@ class CategorySerializer(serializers.ModelSerializer):
             "category_id",
             "category_name",
             "tax_exempt",
+            "discount_type",
+            "discount_value",
         ]
+
+    def validate(self, attrs):
+        discount_type = attrs.get(
+            "discount_type",
+            getattr(self.instance, "discount_type", "none"),
+        )
+        discount_value = attrs.get(
+            "discount_value",
+            getattr(self.instance, "discount_value", Decimal("0.00")),
+        )
+        if discount_value < 0:
+            raise serializers.ValidationError({
+                "discount_value": "Discount values cannot be negative."
+            })
+        if discount_type == "percent" and discount_value > 100:
+            raise serializers.ValidationError({
+                "discount_value": "Percent discounts cannot exceed 100%."
+            })
+        return attrs
+
+
+class ItemVariantSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ItemVariant
+        fields = ["variant_id", "size", "color", "quantity"]
+        read_only_fields = ["variant_id"]
+
+    def validate_color(self, value):
+        color = value.strip()
+        supported_colors = {choice[0] for choice in ItemVariant.COLORS}
+        supported_colors.discard("Unspecified")
+        is_existing_legacy_color = (
+            color == "Unspecified"
+            and self.instance is not None
+            and self.instance.color == color
+        )
+        if color not in supported_colors and not is_existing_legacy_color:
+            raise serializers.ValidationError("Select a supported color.")
+        return color
+
+    def validate(self, attrs):
+        size = attrs.get("size", getattr(self.instance, "size", None))
+        color = attrs.get("color", getattr(self.instance, "color", None))
+        item = self.instance.item if self.instance else self.context.get("item")
+        if item and size and color:
+            matching_variants = ItemVariant.objects.filter(
+                item=item,
+                size=size,
+                color__iexact=color,
+            )
+            if self.instance:
+                matching_variants = matching_variants.exclude(pk=self.instance.pk)
+            if matching_variants.exists():
+                raise serializers.ValidationError({
+                    "color": "This size and color combination already exists."
+                })
+        return attrs
 
 
 class ItemSerializer(serializers.ModelSerializer):
@@ -20,6 +81,7 @@ class ItemSerializer(serializers.ModelSerializer):
         read_only=True,
     )
     cover_url = serializers.SerializerMethodField()
+    variants = ItemVariantSerializer(many=True, read_only=True)
 
     class Meta:
         model = Item
@@ -36,8 +98,50 @@ class ItemSerializer(serializers.ModelSerializer):
             "category",
             "category_name",
             "tax_exempt",
+            "variants",
         ]
         read_only_fields = ["category_name", "cover_url"]
+
+    def validate(self, attrs):
+        category = attrs.get("category", getattr(self.instance, "category", None))
+        if category and category.category_name.casefold() == "apparel":
+            if (
+                self.instance
+                and self.instance.is_apparel
+                and "item_quantity" in attrs
+                and attrs["item_quantity"] != self.instance.item_quantity
+            ):
+                raise serializers.ValidationError({
+                    "item_quantity": "Manage apparel stock through its size and color variants."
+                })
+        elif self.instance and self.instance.is_apparel and self.instance.variants.exists():
+            raise serializers.ValidationError({
+                "category": "Remove this item's variants before changing its category."
+            })
+        return attrs
+
+    def create(self, validated_data):
+        item = super().create(validated_data)
+        if item.is_apparel and item.item_quantity:
+            ItemVariant.objects.create(
+                item=item,
+                size="Unspecified",
+                color="Unspecified",
+                quantity=item.item_quantity,
+            )
+        return item
+
+    def update(self, instance, validated_data):
+        was_apparel = instance.is_apparel
+        item = super().update(instance, validated_data)
+        if item.is_apparel and not was_apparel and item.item_quantity:
+            ItemVariant.objects.create(
+                item=item,
+                size="Unspecified",
+                color="Unspecified",
+                quantity=item.item_quantity,
+            )
+        return item
 
     def get_cover_url(self, obj):
         if obj.cover_url:
@@ -69,6 +173,17 @@ class CartItemSerializer(serializers.ModelSerializer):
     subtotal = serializers.SerializerMethodField()
     tax_amount = serializers.SerializerMethodField()
     line_total = serializers.SerializerMethodField()
+    variant_id = serializers.IntegerField(read_only=True)
+    variant_size = serializers.CharField(
+        source="variant.size",
+        read_only=True,
+        allow_null=True,
+    )
+    variant_color = serializers.CharField(
+        source="variant.color",
+        read_only=True,
+        allow_null=True,
+    )
 
     class Meta:
         model = CartItem
@@ -76,6 +191,9 @@ class CartItemSerializer(serializers.ModelSerializer):
             "id",
             "item",
             "item_details",
+            "variant_id",
+            "variant_size",
+            "variant_color",
             "item_name",
             "item_price",
             "quantity",
@@ -147,8 +265,13 @@ class SaleItemSerializer(serializers.ModelSerializer):
         fields = [
             "item_name",
             "item_code",
+            "variant_size",
+            "variant_color",
             "quantity",
             "unit_price",
+            "discount_type",
+            "discount_value",
+            "discount_amount",
             "line_total",
             "tax_amount",
         ]
@@ -165,6 +288,7 @@ class SaleReceiptSerializer(serializers.ModelSerializer):
             "issued_at",
             "items",
             "subtotal",
+            "discount_total",
             "tax_amount",
             "total",
             "payment_method",

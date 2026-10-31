@@ -1,8 +1,9 @@
 import { CommonModule } from '@angular/common';
+import { HttpErrorResponse } from '@angular/common/http';
 import { Component, inject } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { Router, RouterLink } from '@angular/router';
-import { AuthService, USER_ROLES, UserRole } from './auth.service';
+import { AuthService } from './auth.service';
 
 @Component({
   selector: 'app-login-page',
@@ -14,11 +15,11 @@ import { AuthService, USER_ROLES, UserRole } from './auth.service';
 export class LoginPageComponent {
   private readonly authService = inject(AuthService);
   private readonly router = inject(Router);
-  readonly userRoles = USER_ROLES;
-  userRole: UserRole = 'Student';
   userId = '';
   password = '';
   showPassword = false;
+  submitting = false;
+  loginError = '';
 
   onSubmit(): void {
     const userId = this.userId.trim();
@@ -26,7 +27,19 @@ export class LoginPageComponent {
       return;
     }
 
-    this.authService.startDemoSession(this.userRole, userId);
-    void this.router.navigateByUrl('/store');
+    this.submitting = true;
+    this.loginError = '';
+    this.authService.login(Number(userId), this.password).subscribe({
+      next: () => {
+        this.submitting = false;
+        void this.router.navigateByUrl('/store');
+      },
+      error: error => {
+        this.submitting = false;
+        this.loginError = error instanceof HttpErrorResponse
+          ? error.error?.detail ?? 'Could not log in. Check your user ID and password.'
+          : 'Could not log in. Check your connection and try again.';
+      }
+    });
   }
 }

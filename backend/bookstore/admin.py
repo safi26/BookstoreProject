@@ -1,5 +1,5 @@
 from django.contrib import admin
-from .models import Category, Item
+from .models import Category, Item, StudentId
 
 
 def is_manager(user):
@@ -28,6 +28,16 @@ class ItemAdmin(admin.ModelAdmin):
 
     list_filter = ("category", "tax_exempt")
     search_fields = ("item",)
+
+    def has_add_permission(self, request):
+        return is_manager(request.user)
+
+
+@admin.register(StudentId)
+class StudentIdAdmin(admin.ModelAdmin):
+    list_display = ("student_id", "is_active")
+    list_filter = ("is_active",)
+    search_fields = ("student_id",)
 
     def has_add_permission(self, request):
         return is_manager(request.user)

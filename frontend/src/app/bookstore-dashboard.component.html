@@ -7,7 +7,7 @@
     <nav class="store-nav" aria-label="Store navigation">
       <span class="role-chip">{{ signedInRole }}</span>
       <button class="logout-trigger" type="button" (click)="signOut()">Log out</button>
-      <button *ngIf="!isManager" class="bag-trigger" type="button" (click)="showBag = true" [attr.aria-label]="(isStudent ? 'Cart, ' : 'Shopping bag, ') + bagCount + ' items'">
+      <button class="bag-trigger" type="button" (click)="showBag = true" [attr.aria-label]="(isStudent ? 'Cart, ' : 'Shopping bag, ') + bagCount + ' items'">
         {{ isStudent ? 'Cart' : 'Bag' }} <span class="bag-count">{{ bagCount }}</span>
       </button>
     </nav>
@@ -170,6 +170,7 @@
                 </td>
                 <td>
                   <div class="manager-book-actions inventory-actions">
+                    <button type="button" (click)="addToBag(book)" [attr.aria-label]="'Add ' + book.title + ' to bag'">Add to bag</button>
                     <label class="tax-exemption-toggle item-tax-toggle">
                       <input type="checkbox" [checked]="book.taxExempt" [disabled]="taxExemptionUpdating"
                         (change)="setItemTaxExempt(book, $event)" />
@@ -239,8 +240,8 @@
     <a href="#top">Back to top ↑</a>
   </footer>
 
-  <button *ngIf="showBag && !isManager" class="bag-scrim" type="button" aria-label="Close shopping bag" (click)="showBag = false"></button>
-  <aside *ngIf="showBag && !isManager" class="bag-panel" role="dialog" aria-modal="true" aria-labelledby="bag-title">
+  <button *ngIf="showBag" class="bag-scrim" type="button" aria-label="Close shopping bag" (click)="showBag = false"></button>
+  <aside *ngIf="showBag" class="bag-panel" role="dialog" aria-modal="true" aria-labelledby="bag-title">
     <div class="bag-heading">
       <div><p class="store-kicker">Your picks</p><h2 id="bag-title">{{ isStudent ? 'Your cart' : 'The book bag' }} <span>({{ bagCount }})</span></h2></div>
       <button class="close-bag" type="button" aria-label="Close shopping bag" (click)="showBag = false">×</button>
@@ -272,14 +273,30 @@
       </article>
     </div>
     <div class="bag-checkout" *ngIf="bag.length">
+      <div *ngIf="isStudent" class="student-id-entry">
+        <label for="student-id">Student ID <span class="optional-label">Optional</span></label>
+        <div class="student-id-row">
+          <input id="student-id" name="studentId" type="text" autocomplete="off" maxlength="30"
+            [(ngModel)]="studentIdInput" (ngModelChange)="onStudentIdChange()" (keydown.enter)="applyStudentId()"
+            [attr.aria-invalid]="!!studentIdError" aria-describedby="student-id-message" />
+          <button type="button" [disabled]="!studentIdInput.trim() || cartLoading" (click)="applyStudentId()">Apply</button>
+        </div>
+        <p *ngIf="studentIdError" id="student-id-message" class="payment-error" role="alert">{{ studentIdError }}</p>
+        <p *ngIf="!studentIdError && studentIdBlocksPayment && studentIdInput.trim()" id="student-id-message" class="payment-error" role="status">Select Apply to check this ID, or clear it to pay full price.</p>
+      </div>
+      <label *ngIf="isManager" class="tax-exemption-toggle employee-discount-toggle">
+        <input type="checkbox" name="useEmployeeDiscount" [(ngModel)]="useEmployeeDiscount" (ngModelChange)="onEmployeeDiscountChange()" />
+        <span>Use Employee Discount?</span>
+      </label>
       <div><span>Subtotal</span><strong>{{ bagSubtotal | currency:'USD' }}</strong></div>
+      <div *ngIf="bagDiscount > 0" class="discount-row"><span>{{ bagDiscountLabel }}</span><strong>-{{ bagDiscount | currency:'USD' }}</strong></div>
       <div><span>Tax (8.25%, unless exempt)</span><strong>{{ bagTax | currency:'USD' }}</strong></div>
       <div class="bag-total-row"><span>Total</span><strong>{{ bagTotal | currency:'USD' }}</strong></div>
-      <div *ngIf="isStudent" class="payment-method" role="group" aria-label="Payment method">
+      <div *ngIf="canCheckout" class="payment-method" role="group" aria-label="Payment method">
         <button type="button" [class.is-selected]="paymentMethod === 'cash'" [attr.aria-pressed]="paymentMethod === 'cash'" (click)="selectPaymentMethod('cash')">Cash</button>
         <button type="button" [class.is-selected]="paymentMethod === 'card'" [attr.aria-pressed]="paymentMethod === 'card'" (click)="selectPaymentMethod('card')">Card</button>
       </div>
-      <div *ngIf="isStudent && paymentMethod === 'cash'" class="cash-payment">
+      <div *ngIf="canCheckout && paymentMethod === 'cash'" class="cash-payment">
         <label for="cash-received">Cash received</label>
         <div class="cash-input-row">
           <span>$</span>
@@ -288,12 +305,11 @@
         <p *ngIf="cashReceived !== null && cashReceived < bagTotal" class="payment-error" role="alert">Amount received must cover the total.</p>
         <p *ngIf="cashReceived !== null && cashReceived >= bagTotal" class="change-due">Change due <strong>{{ changeDue | currency:'USD' }}</strong></p>
       </div>
-      <button *ngIf="isStudent && paymentMethod === 'cash'" class="complete-payment" type="button" [disabled]="!canCompleteStudentSale || processingPayment || cancellingTransaction" (click)="completeStudentSale()">
+      <button *ngIf="canCheckout && paymentMethod === 'cash'" class="complete-payment" type="button" [disabled]="!canCompleteSale || processingPayment || cancellingTransaction" (click)="completeSale()">
         {{ processingPayment ? 'Processing payment...' : 'Complete cash payment' }} <span>{{ bagTotal | currency:'USD' }}</span>
       </button>
-      <button *ngIf="!isStudent" type="button" (click)="checkout()">Continue to checkout <span aria-hidden="true">↗</span></button>
-      <button *ngIf="isStudent" class="cancel-transaction" type="button" [disabled]="processingPayment || cancellingTransaction"
-        (click)="cancelStudentTransaction()">{{ cancellingTransaction ? 'Canceling transaction...' : 'Cancel transaction' }}</button>
+      <button *ngIf="canCheckout" class="cancel-transaction" type="button" [disabled]="processingPayment || cancellingTransaction"
+        (click)="cancelTransaction()">{{ cancellingTransaction ? 'Canceling transaction...' : 'Cancel transaction' }}</button>
       <p *ngIf="checkoutMessage && !showCardDialog" role="status">{{ checkoutMessage }}</p>
     </div>
   </aside>
@@ -364,13 +380,15 @@
     </div>
     <p class="card-demo-note">Demo only: a number ending in 0000 simulates a decline. No real payment is processed; card details are not sent or saved.</p>
     <p *ngIf="checkoutMessage" class="payment-error card-dialog-message" role="alert">{{ checkoutMessage }}</p>
+    <p *ngIf="studentIdBlocksPayment" class="payment-error card-dialog-message" role="alert">Enter a valid student ID, or clear the field to pay full price.</p>
     <div class="card-dialog-total"><span>Subtotal</span><strong>{{ bagSubtotal | currency:'USD' }}</strong></div>
+    <div *ngIf="bagDiscount > 0" class="card-dialog-total discount-row"><span>{{ bagDiscountLabel }}</span><strong>-{{ bagDiscount | currency:'USD' }}</strong></div>
     <div class="card-dialog-total"><span>Tax</span><strong>{{ bagTax | currency:'USD' }}</strong></div>
     <div class="card-dialog-total card-dialog-grand-total"><span>Total</span><strong>{{ bagTotal | currency:'USD' }}</strong></div>
     <div class="card-dialog-actions">
       <button type="button" class="cancel-transaction" [disabled]="processingPayment || cancellingTransaction"
-        (click)="cancelStudentTransaction()">{{ cancellingTransaction ? 'Canceling...' : 'Cancel transaction' }}</button>
-      <button type="button" class="complete-payment" [disabled]="!canCompleteStudentSale || processingPayment || cancellingTransaction" (click)="completeStudentSale()">
+        (click)="cancelTransaction()">{{ cancellingTransaction ? 'Canceling...' : 'Cancel transaction' }}</button>
+      <button type="button" class="complete-payment" [disabled]="!canCompleteSale || processingPayment || cancellingTransaction" (click)="completeSale()">
         {{ processingPayment ? 'Processing payment...' : 'Pay now' }} <span>{{ bagTotal | currency:'USD' }}</span>
       </button>
     </div>
@@ -455,6 +473,9 @@
           </tr>
         </tbody>
       </table>
+      <p *ngIf="sale.discountAmount > 0" class="sales-record-payment discount-row">
+        {{ sale.discountLabel }}: -{{ sale.discountAmount | currency:'USD' }}
+      </p>
       <p class="sales-record-payment">
         {{ sale.paymentMethod === 'cash' ? 'Cash' : 'Card (demo)' }}
         <span *ngIf="sale.cashReceived !== undefined">
@@ -476,7 +497,7 @@
     <p class="receipt-meta">Receipt {{ saleReceipt.number }} <span>{{ saleReceipt.issuedAt }}</span></p>
     <p *ngIf="saleReceipt.paymentMethod === 'card'" class="card-demo-note">Demo card approved. No real charge was made.</p>
     <table class="receipt-table">
-      <thead><tr><th>Item</th><th>Qty</th><th>Each</th><th>Subtotal</th><th>Tax</th><th>Total</th></tr></thead>
+      <thead><tr><th>Item</th><th>Qty</th><th>Each</th><th>{{ saleReceipt.discountAmount > 0 ? 'After discount' : 'Subtotal' }}</th><th>Tax</th><th>Total</th></tr></thead>
       <tbody>
         <tr *ngFor="let item of saleReceipt.items">
           <td>{{ item.title }}<small>{{ item.itemCode }}</small></td>
@@ -490,6 +511,7 @@
     </table>
     <dl class="receipt-total">
       <div><dt>Subtotal</dt><dd>{{ saleReceipt.subtotal | currency:'USD' }}</dd></div>
+      <div *ngIf="saleReceipt.discountAmount > 0" class="discount-row"><dt>{{ saleReceipt.discountLabel }}</dt><dd>-{{ saleReceipt.discountAmount | currency:'USD' }}</dd></div>
       <div><dt>Tax</dt><dd>{{ saleReceipt.taxAmount | currency:'USD' }}</dd></div>
       <div class="receipt-grand-total"><dt>Total paid</dt><dd>{{ saleReceipt.total | currency:'USD' }}</dd></div>
       <div><dt>Payment</dt><dd>{{ saleReceipt.paymentMethod === 'cash' ? 'Cash' : 'Card (demo)' }}</dd></div>

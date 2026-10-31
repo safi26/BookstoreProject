@@ -1,4 +1,4 @@
-import { HttpClient } from '@angular/common/http';
+import { HttpClient, HttpParams } from '@angular/common/http';
 import { Injectable, inject } from '@angular/core';
 import { Observable } from 'rxjs';
 
@@ -31,8 +31,17 @@ export interface ApiCartItem {
   item_price: string;
   quantity: number;
   subtotal: string;
+  discount_amount: string;
   tax_amount: string;
   line_total: string;
+}
+
+export type DiscountType = '' | 'student' | 'employee';
+
+export interface DiscountRequest {
+  role: string;
+  student_id?: string;
+  use_employee_discount?: boolean;
 }
 
 export interface ApiCart {
@@ -41,6 +50,9 @@ export interface ApiCart {
   cart_items: ApiCartItem[];
   total_items: number;
   subtotal: string;
+  discount_type: DiscountType;
+  discount_percent: string;
+  discount_amount: string;
   tax_amount: string;
   total_price: string;
 }
@@ -50,6 +62,7 @@ export interface ApiSaleItem {
   item_code: string;
   quantity: number;
   unit_price: string;
+  discount_amount: string;
   line_total: string;
   tax_amount: string;
 }
@@ -59,6 +72,9 @@ export interface ApiSaleReceipt {
   issued_at: string;
   items: ApiSaleItem[];
   subtotal: string;
+  discount_type: DiscountType;
+  discount_percent: string;
+  discount_amount: string;
   tax_amount: string;
   total: string;
   payment_method: 'cash' | 'card';
@@ -66,7 +82,7 @@ export interface ApiSaleReceipt {
   change_due: string;
 }
 
-export interface CheckoutPayload {
+export interface CheckoutPayload extends DiscountRequest {
   payment_method: 'cash' | 'card';
   cash_received?: string;
 }
@@ -130,8 +146,17 @@ export class StoreApiService {
     return this.http.delete<void>(`${this.apiUrl}/items/${itemId}/`);
   }
 
-  getCart(userId: number): Observable<ApiCart> {
-    return this.http.get<ApiCart>(`${this.apiUrl}/users/${userId}/cart/`);
+  getCart(userId: number, discount: DiscountRequest): Observable<ApiCart> {
+    const params = new HttpParams({
+      fromObject: {
+        role: discount.role,
+        ...(discount.student_id ? { student_id: discount.student_id } : {}),
+        ...(discount.use_employee_discount !== undefined
+          ? { use_employee_discount: String(discount.use_employee_discount) }
+          : {})
+      }
+    });
+    return this.http.get<ApiCart>(`${this.apiUrl}/users/${userId}/cart/`, { params });
   }
 
   addCartItem(userId: number, itemId: number, quantity = 1): Observable<ApiCartItem> {

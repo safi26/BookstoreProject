@@ -1,7 +1,7 @@
 from rest_framework import serializers
 
 from .models import Category, Item, Cart, CartItem, Sale, SaleItem
-from .tax import calculate_line_tax
+from .pricing import discount_percent, price_line
 
 
 class CategorySerializer(serializers.ModelSerializer):
@@ -67,6 +67,7 @@ class CartItemSerializer(serializers.ModelSerializer):
     )
 
     subtotal = serializers.SerializerMethodField()
+    discount_amount = serializers.SerializerMethodField()
     tax_amount = serializers.SerializerMethodField()
     line_total = serializers.SerializerMethodField()
 
@@ -80,18 +81,26 @@ class CartItemSerializer(serializers.ModelSerializer):
             "item_price",
             "quantity",
             "subtotal",
+            "discount_amount",
             "tax_amount",
             "line_total",
         ]
 
+    def _price(self, obj):
+        return price_line(obj.item, obj.quantity, self.context.get("discount_type"))
+
     def get_subtotal(self, obj):
-        return obj.item.item_price * obj.quantity
+        return self._price(obj)[0]
+
+    def get_discount_amount(self, obj):
+        return self._price(obj)[1]
 
     def get_tax_amount(self, obj):
-        return calculate_line_tax(obj.item, obj.quantity)
+        return self._price(obj)[2]
 
     def get_line_total(self, obj):
-        return self.get_subtotal(obj) + self.get_tax_amount(obj)
+        subtotal, discount, tax = self._price(obj)
+        return subtotal - discount + tax
 
 
 class CartSerializer(serializers.ModelSerializer):
@@ -102,6 +111,9 @@ class CartSerializer(serializers.ModelSerializer):
 
     total_items = serializers.SerializerMethodField()
     subtotal = serializers.SerializerMethodField()
+    discount_type = serializers.SerializerMethodField()
+    discount_percent = serializers.SerializerMethodField()
+    discount_amount = serializers.SerializerMethodField()
     tax_amount = serializers.SerializerMethodField()
     total_price = serializers.SerializerMethodField()
 
@@ -113,6 +125,9 @@ class CartSerializer(serializers.ModelSerializer):
             "cart_items",
             "total_items",
             "subtotal",
+            "discount_type",
+            "discount_percent",
+            "discount_amount",
             "tax_amount",
             "total_price",
             "created_at",
@@ -125,20 +140,37 @@ class CartSerializer(serializers.ModelSerializer):
             for cart_item in obj.cart_items.all()
         )
 
-    def get_subtotal(self, obj):
+    def _sum_lines(self, obj, index):
         return sum(
-            cart_item.item.item_price * cart_item.quantity
+            price_line(
+                cart_item.item,
+                cart_item.quantity,
+                self.context.get("discount_type"),
+            )[index]
             for cart_item in obj.cart_items.all()
         )
+
+    def get_subtotal(self, obj):
+        return self._sum_lines(obj, 0)
+
+    def get_discount_type(self, obj):
+        return self.context.get("discount_type") or ""
+
+    def get_discount_percent(self, obj):
+        return discount_percent(self.context.get("discount_type"))
+
+    def get_discount_amount(self, obj):
+        return self._sum_lines(obj, 1)
 
     def get_tax_amount(self, obj):
-        return sum(
-            calculate_line_tax(cart_item.item, cart_item.quantity)
-            for cart_item in obj.cart_items.all()
-        )
+        return self._sum_lines(obj, 2)
 
     def get_total_price(self, obj):
-        return self.get_subtotal(obj) + self.get_tax_amount(obj)
+        return (
+            self.get_subtotal(obj)
+            - self.get_discount_amount(obj)
+            + self.get_tax_amount(obj)
+        )
 
 
 class SaleItemSerializer(serializers.ModelSerializer):
@@ -149,6 +181,7 @@ class SaleItemSerializer(serializers.ModelSerializer):
             "item_code",
             "quantity",
             "unit_price",
+            "discount_amount",
             "line_total",
             "tax_amount",
         ]
@@ -165,6 +198,9 @@ class SaleReceiptSerializer(serializers.ModelSerializer):
             "issued_at",
             "items",
             "subtotal",
+            "discount_type",
+            "discount_percent",
+            "discount_amount",
             "tax_amount",
             "total",
             "payment_method",

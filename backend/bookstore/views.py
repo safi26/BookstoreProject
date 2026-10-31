@@ -18,7 +18,13 @@ from .serializers import (
     CartItemSerializer,
     SaleReceiptSerializer,
 )
-from .tax import calculate_line_tax
+from .pricing import (
+    INVALID_STUDENT_ID_MESSAGE,
+    InvalidStudentId,
+    discount_percent,
+    price_line,
+    resolve_discount,
+)
 
 
 User = get_user_model()
@@ -64,9 +70,24 @@ class CartView(APIView):
     def get(self, request, user_id):
         user = get_object_or_404(User, id=user_id)
 
+        try:
+            discount_type = resolve_discount(
+                request.query_params.get("role"),
+                request.query_params.get("student_id"),
+                request.query_params.get("use_employee_discount"),
+            )
+        except InvalidStudentId:
+            return Response(
+                {"error": INVALID_STUDENT_ID_MESSAGE},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
         cart, created = Cart.objects.get_or_create(user=user)
 
-        serializer = CartSerializer(cart)
+        serializer = CartSerializer(
+            cart,
+            context={"discount_type": discount_type},
+        )
 
         return Response(serializer.data)
 
@@ -284,6 +305,18 @@ class CheckoutView(APIView):
                 )
             cash_received = cash_received.quantize(Decimal("0.01"))
 
+        try:
+            discount_type = resolve_discount(
+                request.data.get("role"),
+                request.data.get("student_id"),
+                request.data.get("use_employee_discount"),
+            )
+        except InvalidStudentId:
+            return Response(
+                {"error": INVALID_STUDENT_ID_MESSAGE},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
         with transaction.atomic():
             cart = Cart.objects.select_for_update().filter(user=user).first()
             if cart is None:
@@ -318,24 +351,27 @@ class CheckoutView(APIView):
                         status=status.HTTP_400_BAD_REQUEST,
                     )
 
+            line_prices = {
+                cart_item.pk: price_line(
+                    locked_items[cart_item.item_id],
+                    cart_item.quantity,
+                    discount_type,
+                )
+                for cart_item in cart_items
+            }
             subtotal = sum(
-                (
-                    locked_items[cart_item.item_id].item_price * cart_item.quantity
-                    for cart_item in cart_items
-                ),
+                (line[0] for line in line_prices.values()),
+                Decimal("0.00"),
+            ).quantize(Decimal("0.01"))
+            discount_amount = sum(
+                (line[1] for line in line_prices.values()),
                 Decimal("0.00"),
             ).quantize(Decimal("0.01"))
             tax_amount = sum(
-                (
-                    calculate_line_tax(
-                        locked_items[cart_item.item_id],
-                        cart_item.quantity,
-                    )
-                    for cart_item in cart_items
-                ),
+                (line[2] for line in line_prices.values()),
                 Decimal("0.00"),
             ).quantize(Decimal("0.01"))
-            total = subtotal + tax_amount
+            total = subtotal - discount_amount + tax_amount
             if payment_method == "cash" and cash_received < total:
                 return Response(
                     {"error": "Cash received must cover the cart total."},
@@ -348,6 +384,9 @@ class CheckoutView(APIView):
                 ),
                 payment_method=payment_method,
                 subtotal=subtotal,
+                discount_type=discount_type or "",
+                discount_percent=discount_percent(discount_type),
+                discount_amount=discount_amount,
                 tax_amount=tax_amount,
                 total=total,
                 cash_received=cash_received,
@@ -356,8 +395,8 @@ class CheckoutView(APIView):
 
             for cart_item in cart_items:
                 item = locked_items[cart_item.item_id]
-                line_total = (item.item_price * cart_item.quantity).quantize(Decimal("0.01"))
-                line_tax = calculate_line_tax(item, cart_item.quantity)
+                line_subtotal, line_discount, line_tax = line_prices[cart_item.pk]
+                line_total = (line_subtotal - line_discount).quantize(Decimal("0.01"))
                 SaleItem.objects.create(
                     sale=sale,
                     item=item,
@@ -365,6 +404,7 @@ class CheckoutView(APIView):
                     item_code=item.item_code,
                     quantity=cart_item.quantity,
                     unit_price=item.item_price,
+                    discount_amount=line_discount,
                     line_total=line_total,
                     tax_amount=line_tax,
                 )

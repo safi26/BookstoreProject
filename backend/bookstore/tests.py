@@ -3,7 +3,7 @@ from decimal import Decimal
 from django.contrib.auth import get_user_model
 from rest_framework.test import APITestCase
 
-from .models import Cart, CartItem, Category, Item, Sale, SaleItem
+from .models import Cart, CartItem, Category, Item, Sale, SaleItem, StudentId
 
 
 class CheckoutApiTests(APITestCase):
@@ -247,3 +247,148 @@ class CheckoutApiTests(APITestCase):
 		self.assertEqual(Sale.objects.count(), 0)
 		self.item.refresh_from_db()
 		self.assertEqual(self.item.item_quantity, 8)
+
+
+class DiscountApiTests(APITestCase):
+	def setUp(self):
+		self.user = get_user_model().objects.create_user(
+			username="discount-user",
+			password="test-password",
+		)
+		category = Category.objects.create(category_name="Fiction")
+		self.item = Item.objects.create(
+			item="Test Book",
+			item_quantity=8,
+			item_price=Decimal("12.50"),
+			item_code="BK-TEST",
+			category=category,
+		)
+		cart = Cart.objects.create(user=self.user)
+		self.cart_item = CartItem.objects.create(cart=cart, item=self.item, quantity=2)
+		StudentId.objects.create(student_id="S1001")
+		StudentId.objects.create(student_id="S2002", is_active=False)
+		self.cart_url = f"/api/users/{self.user.pk}/cart/"
+		self.checkout_url = f"/api/users/{self.user.pk}/checkout/"
+
+	def checkout(self, **discount_fields):
+		return self.client.post(
+			self.checkout_url,
+			{"payment_method": "card", **discount_fields},
+			format="json",
+		)
+
+	def assert_no_sale_and_cart_intact(self):
+		self.item.refresh_from_db()
+		self.assertEqual(self.item.item_quantity, 8)
+		self.assertFalse(Sale.objects.exists())
+		self.assertTrue(CartItem.objects.filter(pk=self.cart_item.pk).exists())
+
+	def test_student_with_valid_id_gets_discount_taxed_on_discounted_price(self):
+		response = self.checkout(role="Student", student_id="S1001")
+
+		self.assertEqual(response.status_code, 201)
+		self.assertEqual(response.data["subtotal"], "25.00")
+		self.assertEqual(response.data["discount_type"], "student")
+		self.assertEqual(response.data["discount_percent"], "10.00")
+		self.assertEqual(response.data["discount_amount"], "2.50")
+		self.assertEqual(response.data["tax_amount"], "1.86")
+		self.assertEqual(response.data["total"], "24.36")
+
+	def test_invalid_or_inactive_student_id_is_rejected_without_changes(self):
+		for student_id in ("NOPE", "S2002"):
+			with self.subTest(student_id=student_id):
+				response = self.checkout(role="Student", student_id=student_id)
+
+				self.assertEqual(response.status_code, 400)
+				self.assertEqual(response.data["error"], "Enter a valid student ID.")
+				self.assert_no_sale_and_cart_intact()
+
+				cart_response = self.client.get(
+					self.cart_url,
+					{"role": "Student", "student_id": student_id},
+				)
+				self.assertEqual(cart_response.status_code, 400)
+
+	def test_student_with_blank_id_pays_full_price(self):
+		response = self.checkout(role="Student", student_id="  ")
+
+		self.assertEqual(response.status_code, 201)
+		self.assertEqual(response.data["discount_type"], "")
+		self.assertEqual(response.data["discount_amount"], "0.00")
+		self.assertEqual(response.data["total"], "27.06")
+
+	def test_manager_discount_follows_checkbox(self):
+		cases = (
+			({"use_employee_discount": "true"}, "employee", Decimal("5.00"), Decimal("21.65")),
+			({"use_employee_discount": "false"}, "", Decimal("0.00"), Decimal("27.06")),
+			({}, "", Decimal("0.00"), Decimal("27.06")),
+		)
+		for fields, discount_type, discount, total in cases:
+			with self.subTest(fields=fields):
+				response = self.client.get(self.cart_url, {"role": "Manager", **fields})
+
+				self.assertEqual(response.data["discount_type"], discount_type)
+				self.assertEqual(response.data["discount_amount"], discount)
+				self.assertEqual(response.data["total_price"], total)
+
+	def test_manager_checkout_with_json_boolean_checkbox(self):
+		response = self.checkout(role="Manager", use_employee_discount=True)
+
+		self.assertEqual(response.status_code, 201)
+		self.assertEqual(response.data["discount_type"], "employee")
+		self.assertEqual(response.data["total"], "21.65")
+
+	def test_operator_is_discounted_automatically(self):
+		response = self.checkout(role="Operator")
+
+		self.assertEqual(response.status_code, 201)
+		self.assertEqual(response.data["discount_type"], "employee")
+		self.assertEqual(response.data["discount_percent"], "20.00")
+		self.assertEqual(response.data["discount_amount"], "5.00")
+
+	def test_no_role_gets_no_discount(self):
+		response = self.checkout()
+
+		self.assertEqual(response.status_code, 201)
+		self.assertEqual(response.data["discount_amount"], "0.00")
+
+	def test_discount_applies_to_tax_exempt_items(self):
+		self.item.tax_exempt = True
+		self.item.save(update_fields=["tax_exempt"])
+
+		response = self.checkout(role="Operator")
+
+		self.assertEqual(response.data["discount_amount"], "5.00")
+		self.assertEqual(response.data["tax_amount"], "0.00")
+		self.assertEqual(response.data["total"], "20.00")
+
+	def test_discount_rounds_to_cents_per_line(self):
+		self.item.item_price = Decimal("9.99")
+		self.item.save(update_fields=["item_price"])
+		self.cart_item.quantity = 1
+		self.cart_item.save(update_fields=["quantity"])
+
+		response = self.checkout(role="Student", student_id="S1001")
+
+		self.assertEqual(response.data["discount_amount"], "1.00")
+		self.assertEqual(response.data["tax_amount"], "0.74")
+		self.assertEqual(response.data["total"], "9.73")
+
+	def test_cart_total_matches_charged_total(self):
+		params = {"role": "Student", "student_id": "S1001"}
+		cart_total = self.client.get(self.cart_url, params).data["total_price"]
+
+		response = self.checkout(**params)
+
+		self.assertEqual(Decimal(response.data["total"]), cart_total)
+
+	def test_receipt_line_is_net_of_discount_and_stored(self):
+		response = self.checkout(role="Student", student_id="S1001")
+
+		sale = Sale.objects.get(receipt_number=response.data["receipt_number"])
+		sale_item = sale.sale_items.get()
+		self.assertEqual(sale.discount_type, "student")
+		self.assertEqual(sale.discount_amount, Decimal("2.50"))
+		self.assertEqual(sale_item.discount_amount, Decimal("2.50"))
+		self.assertEqual(sale_item.line_total, Decimal("22.50"))
+		self.assertEqual(response.data["items"][0]["discount_amount"], "2.50")

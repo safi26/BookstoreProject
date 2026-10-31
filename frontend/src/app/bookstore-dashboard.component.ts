@@ -5,7 +5,7 @@ import { FormsModule } from '@angular/forms';
 import { Router, RouterLink } from '@angular/router';
 import { forkJoin } from 'rxjs';
 import { AuthService } from './auth.service';
-import { ApiCartItem, ApiItem, ApiSaleReceipt, CheckoutPayload, ItemPayload, StoreApiService } from './store-api.service';
+import { ApiCartItem, ApiItem, ApiSaleReceipt, CheckoutPayload, DiscountRequest, DiscountType, ItemPayload, StoreApiService } from './store-api.service';
 
 interface Book {
   id: number;
@@ -41,6 +41,7 @@ interface BagItem {
   quantity: number;
   cartItemId: number;
   subtotal: number;
+  discountAmount: number;
   taxAmount: number;
 }
 
@@ -59,6 +60,8 @@ interface SaleReceipt {
   issuedAt: string;
   items: ReceiptItem[];
   subtotal: number;
+  discountLabel: string;
+  discountAmount: number;
   taxAmount: number;
   total: number;
   paymentMethod: 'cash' | 'card';
@@ -81,6 +84,8 @@ export class BookstoreDashboardComponent {
   readonly signedInRole = this.authService.currentRole ?? 'Student';
   readonly isManager = this.signedInRole === 'Manager';
   readonly isStudent = this.signedInRole === 'Student';
+  readonly isOperator = this.signedInRole === 'Operator';
+  readonly canCheckout = this.isStudent || this.isOperator || this.isManager;
   categories: string[] = ['All items'];
   books: Book[] = [];
   loading = true;
@@ -101,6 +106,13 @@ export class BookstoreDashboardComponent {
   editingBookId: number | null = null;
   bookDraft: BookDraft = this.createBookDraft();
   bag: BagItem[] = [];
+  bagDiscountLabel = '';
+  cartLoading = false;
+  private cartRequestId = 0;
+  studentIdInput = '';
+  appliedStudentId = '';
+  studentIdError = '';
+  useEmployeeDiscount = true;
   bagMessage = '';
   checkoutMessage = '';
   showBag = false;
@@ -274,8 +286,16 @@ export class BookstoreDashboardComponent {
     return this.bag.reduce((total, item) => total + item.taxAmount, 0);
   }
 
+  get bagDiscount(): number {
+    return this.bag.reduce((total, item) => total + item.discountAmount, 0);
+  }
+
   get bagTotal(): number {
-    return this.bagSubtotal + this.bagTax;
+    return Math.round((this.bagSubtotal - this.bagDiscount + this.bagTax) * 100) / 100;
+  }
+
+  get studentIdBlocksPayment(): boolean {
+    return this.isStudent && this.studentIdInput.trim() !== this.appliedStudentId;
   }
 
   get changeDue(): number {
@@ -334,8 +354,10 @@ export class BookstoreDashboardComponent {
     }
   }
 
-  get canCompleteStudentSale(): boolean {
-    return this.isStudent && this.bag.length > 0 &&
+  get canCompleteSale(): boolean {
+    return this.canCheckout && this.bag.length > 0 &&
+      !this.cartLoading &&
+      !this.studentIdBlocksPayment &&
       (this.paymentMethod === 'card'
         ? this.cardholderNameIsValid &&
           this.cardNumberIsValid &&
@@ -355,6 +377,31 @@ export class BookstoreDashboardComponent {
 
     this.showCardDialog = false;
     this.clearCardDetails();
+  }
+
+  onStudentIdChange(): void {
+    this.studentIdError = '';
+    if (!this.studentIdInput.trim() && this.appliedStudentId) {
+      this.loadCart('');
+    }
+  }
+
+  applyStudentId(): void {
+    if (this.isStudent) {
+      this.studentIdError = '';
+      this.loadCart(this.studentIdInput.trim());
+    }
+  }
+
+  onEmployeeDiscountChange(): void {
+    this.loadCart();
+  }
+
+  private resetDiscountSelection(): void {
+    this.studentIdInput = '';
+    this.appliedStudentId = '';
+    this.studentIdError = '';
+    this.useEmployeeDiscount = true;
   }
 
   closeCardDialog(): void {
@@ -430,10 +477,6 @@ export class BookstoreDashboardComponent {
   }
 
   addToBag(book: Book): void {
-    if (this.isManager) {
-      return;
-    }
-
     const userId = this.authService.currentUserId;
     if (userId === null) {
       this.bagMessage = 'Use a numeric Django user ID to save items to your cart.';
@@ -500,12 +543,8 @@ export class BookstoreDashboardComponent {
     });
   }
 
-  checkout(): void {
-    this.checkoutMessage = 'Checkout is not connected yet. Your bag is saved while you browse.';
-  }
-
-  cancelStudentTransaction(): void {
-    if (!this.isStudent || this.processingPayment || this.cancellingTransaction) {
+  cancelTransaction(): void {
+    if (!this.canCheckout || this.processingPayment || this.cancellingTransaction) {
       return;
     }
 
@@ -520,6 +559,7 @@ export class BookstoreDashboardComponent {
     this.storeApi.clearCart(userId).subscribe({
       next: () => {
         this.bag = [];
+        this.resetDiscountSelection();
         this.cashReceived = null;
         this.paymentMethod = 'cash';
         this.clearCardDetails();
@@ -538,8 +578,8 @@ export class BookstoreDashboardComponent {
     });
   }
 
-  completeStudentSale(): void {
-    if (!this.canCompleteStudentSale || this.processingPayment || this.cancellingTransaction) {
+  completeSale(): void {
+    if (!this.canCompleteSale || this.processingPayment || this.cancellingTransaction) {
       return;
     }
 
@@ -556,6 +596,7 @@ export class BookstoreDashboardComponent {
     }
 
     const payload: CheckoutPayload = {
+      ...this.discountRequest(this.appliedStudentId),
       payment_method: this.paymentMethod,
       ...(this.paymentMethod === 'cash'
         ? { cash_received: Number(this.cashReceived).toFixed(2) }
@@ -565,7 +606,7 @@ export class BookstoreDashboardComponent {
     this.processingPayment = true;
     this.checkoutMessage = '';
     this.storeApi.checkout(userId, payload).subscribe({
-      next: receipt => this.finishStudentSale(receipt),
+      next: receipt => this.finishSale(receipt),
       error: error => {
         this.processingPayment = false;
         this.checkoutMessage = this.getApiError(error, 'Could not complete the payment. Your cart has not been changed.');
@@ -573,10 +614,11 @@ export class BookstoreDashboardComponent {
     });
   }
 
-  private finishStudentSale(receipt: ApiSaleReceipt): void {
+  private finishSale(receipt: ApiSaleReceipt): void {
     this.receipt = this.toSaleReceipt(receipt);
 
     this.bag = [];
+    this.resetDiscountSelection();
     this.cashReceived = null;
     this.clearCardDetails();
     this.showCardDialog = false;
@@ -601,6 +643,8 @@ export class BookstoreDashboardComponent {
         totalWithTax: Number(item.line_total) + Number(item.tax_amount)
       })),
       subtotal: Number(receipt.subtotal),
+      discountLabel: this.discountLabel(receipt.discount_type, receipt.discount_percent),
+      discountAmount: Number(receipt.discount_amount),
       taxAmount: Number(receipt.tax_amount),
       total: Number(receipt.total),
       paymentMethod: receipt.payment_method,
@@ -968,24 +1012,63 @@ export class BookstoreDashboardComponent {
     });
   }
 
-  private loadCart(): void {
+  private discountRequest(studentId: string): DiscountRequest {
+    return {
+      role: this.signedInRole,
+      ...(this.isStudent && studentId ? { student_id: studentId } : {}),
+      ...(this.isManager ? { use_employee_discount: this.useEmployeeDiscount } : {})
+    };
+  }
+
+  private discountLabel(discountType: DiscountType, percent: string): string {
+    if (!discountType) {
+      return '';
+    }
+
+    return `${discountType === 'student' ? 'Student' : 'Employee'} discount (${Number(percent)}%)`;
+  }
+
+  private loadCart(studentId = this.appliedStudentId): void {
     const userId = this.authService.currentUserId;
     if (userId === null) {
       this.bag = [];
       return;
     }
 
-    this.storeApi.getCart(userId).subscribe({
+    const requestId = ++this.cartRequestId;
+    this.cartLoading = true;
+    this.storeApi.getCart(userId, this.discountRequest(studentId)).subscribe({
       next: cart => {
+        if (requestId !== this.cartRequestId) {
+          return;
+        }
+
+        this.cartLoading = false;
+        this.appliedStudentId = studentId;
+        this.bagDiscountLabel = this.discountLabel(cart.discount_type, cart.discount_percent);
         this.bag = cart.cart_items.map((cartItem: ApiCartItem) => ({
           book: this.toBook(cartItem.item_details),
           quantity: cartItem.quantity,
           cartItemId: cartItem.id,
           subtotal: Number(cartItem.subtotal),
+          discountAmount: Number(cartItem.discount_amount),
           taxAmount: Number(cartItem.tax_amount)
         }));
       },
-      error: error => this.bagMessage = this.getApiError(error, 'Could not load your cart.')
+      error: error => {
+        if (requestId !== this.cartRequestId) {
+          return;
+        }
+
+        this.cartLoading = false;
+        if (studentId && error instanceof HttpErrorResponse && error.status === 400) {
+          this.studentIdError = this.getApiError(error, 'Enter a valid student ID.');
+          this.loadCart('');
+          return;
+        }
+
+        this.bagMessage = this.getApiError(error, 'Could not load your cart.');
+      }
     });
   }
 

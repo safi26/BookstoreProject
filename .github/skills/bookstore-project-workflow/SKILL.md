@@ -24,14 +24,14 @@ The root URL configuration exposes:
 | GET, PUT, PATCH, DELETE | `/api/categories/{category_id}/` | Retrieve or modify a category |
 | GET, POST | `/api/items/` | List or create items |
 | GET, PUT, PATCH, DELETE | `/api/items/{item_id}/` | Retrieve or modify an item |
-| GET, DELETE | `/api/users/{user_id}/cart/` | Read or clear a user's cart |
+| GET, DELETE | `/api/users/{user_id}/cart/` | Read or clear a user's cart; GET accepts discount query params `role`, `student_id`, `use_employee_discount` |
 | POST | `/api/users/{user_id}/cart/items/` | Add `{ "item": item_id, "quantity": 1 }` |
 | PATCH, DELETE | `/api/users/{user_id}/cart/items/{cart_item_id}/` | Set quantity with `{ "quantity": n }`, or remove the line |
-| POST | `/api/users/{user_id}/checkout/` | Complete cash or demo-card checkout; returns and persists the itemized receipt |
+| POST | `/api/users/{user_id}/checkout/` | Complete cash or demo-card checkout with optional `role`, `student_id`, `use_employee_discount`; returns and persists the itemized receipt |
 | GET | `/api/schema/` | OpenAPI schema |
 | GET | `/api/docs/`, `/api/redoc/` | Swagger UI and ReDoc |
 
-Item responses contain `item_id`, `item`, `item_quantity`, `item_price`, `author`, `item_code`, `isbn`, `badge`, `cover_url`, `category` (the category ID), and `category_name`. Category is the only shelf/filter classification; there is no separate catalog field. `cover_url` prefers the item's stored URL and otherwise derives an Open Library cover URL from ISBN. Cart responses use `cart_items`, `total_items`, and `total_price`; each cart line includes an `item_details` object matching the full item response. Prices are serialized as decimal strings on item fields; calculated totals may be JSON numbers.
+Item responses contain `item_id`, `item`, `item_quantity`, `item_price`, `author`, `item_code`, `isbn`, `badge`, `cover_url`, `category` (the category ID), and `category_name`. Category is the only shelf/filter classification; there is no separate catalog field. `cover_url` prefers the item's stored URL and otherwise derives an Open Library cover URL from ISBN. Cart responses use `cart_items`, `total_items`, `subtotal`, `discount_type`, `discount_percent`, `discount_amount`, `tax_amount`, and `total_price`; each cart line includes an `item_details` object matching the full item response. Prices are serialized as decimal strings on item fields; calculated totals may be JSON numbers.
 
 ## Frontend Integration Rules
 
@@ -48,6 +48,14 @@ Item responses contain `item_id`, `item`, `item_quantity`, `item_price`, `author
 - A real numeric Django user ID is required for API-backed carts. Existing local development users can be inspected with `python3 manage.py shell` and Django's `get_user_model()`.
 - Student checkout is persisted by `/api/users/{user_id}/checkout/`: cash is validated and change is calculated on the server, stock is decremented transactionally, cart rows are cleared only on success, and receipt item details are snapshotted in the database.
 - Card checkout is a demo authorization only. Cardholder name, number, expiry, and CVV are used transiently in the browser and are not sent to the API, stored, or charged. A card number ending in `0000` simulates a decline; other valid details are approved before the API records the card-demo sale. Keep this limitation visible; do not describe the endpoint as processing a real payment.
+
+## Discounts
+
+- Discounts are calculated only in `backend/bookstore/pricing.py`, apply to the whole order, and do not stack. Rates are fixed in `DISCOUNT_RATES`: student 10%, employee 20% (placeholder values).
+- A Student needs an active `StudentId` from the roster in Django admin. An invalid ID returns 400 with "Enter a valid student ID." and blocks payment until it is corrected or cleared; a blank ID pays full price.
+- A Manager gets the employee discount through the "Use Employee Discount?" checkbox at checkout, checked by default. An Operator gets it automatically. Managers and Operators can now check out.
+- Tax is calculated on the discounted price. `Sale` stores the discount type, percent, and amount; `SaleItem.line_total` is net of discount and pre-tax.
+- The role is sent by the browser and is not verified, so discounts are not a security boundary. Real login is required before taking real payments.
 
 ## Existing UI Conventions
 

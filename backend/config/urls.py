@@ -15,17 +15,19 @@ Including another URLconf
     2. Add a URL to urlpatterns:  path('blog/', include('blog.urls'))
 """
 from django.contrib import admin
-from django.urls import path
-from django.urls import include, path
+from django.urls import include, path, re_path
 from drf_spectacular.views import (
     SpectacularAPIView,
     SpectacularSwaggerView,
     SpectacularRedocView,
 )
 
+from config.desktop_views import frontend, health_check
+
 
 urlpatterns = [
     path('admin/', admin.site.urls),
+    path("healthz/", health_check, name="health-check"),
     path("api/", include("bookstore.urls")),
     path(
         "api/schema/",
@@ -48,4 +50,5 @@ urlpatterns = [
         ),
         name="redoc",
     ),
+    re_path(r"^(?P<path>.*)$", frontend, name="frontend"),
 ]

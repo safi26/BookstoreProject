@@ -2,6 +2,50 @@
 
 This project was generated with [Angular CLI](https://github.com/angular/angular-cli) version 16.2.16.
 
+## Authentication and permissions
+
+Sign in with a numeric Django user ID and that account's password. The backend
+returns a token and derives the role from the account: staff, superusers, and
+members of the `Manager` group are managers; other accounts are students. The
+frontend's role checks only control presentation; the API enforces manager-only
+catalog changes and sales history, and restricts cart and checkout access to
+the authenticated cart owner. Run `python3 manage.py migrate` in `backend/` to
+create the token-auth tables. Create accounts through Django admin or
+`python3 manage.py createsuperuser`.
+
+### Local development accounts
+
+These accounts exist in the current local development database and may not be
+present in a fresh database:
+
+| User ID | Username | Role |
+|---:|---|---|
+| 8 | Sarmila | Student |
+| 9 | User | Student |
+| 1 | safi | Manager |
+| 2 | testuser | Manager |
+| 3 | testman | Manager |
+
+Use the numeric User ID and the account's locally configured password to sign
+in. Passwords are intentionally not stored in this README; set or reset them
+locally through Django admin or the Django shell. These development accounts
+and their passwords are not suitable for production.
+
+Only manager-configured category discounts are accepted at checkout. Students
+cannot submit line discounts themselves.
+
+### Apparel size and color inventory
+
+Apparel stock is tracked by a distinct size/color variant. Managers can open
+**Manage variants** on an apparel item to add or edit XS, S, M, L, XL, or XXL
+variants in Blue, Green, Black, Grey, or Red, and set each combination's quantity. Students must
+select an in-stock size/color before adding apparel to their cart. Cart lines,
+checkout inventory deductions, and receipts retain the selected variant.
+
+On migration, each existing apparel item's stock is preserved in an
+`Unspecified` size/color variant. New apparel items begin with no stock; add
+their size/color combinations through **Manage variants**.
+
 ## Development server
 
 Run `ng serve` for a dev server. Navigate to `http://localhost:4200/`. The application will automatically reload if you change any of the source files.

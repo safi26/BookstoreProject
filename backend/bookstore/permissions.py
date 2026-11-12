@@ -1,17 +1,36 @@
 from rest_framework.permissions import BasePermission, SAFE_METHODS
 
 
+def is_manager(user):
+    return (
+        user.is_authenticated
+        and (
+            user.is_superuser
+            or user.is_staff
+            or user.groups.filter(name="Manager").exists()
+        )
+    )
+
+
+def user_role(user):
+    if user.groups.filter(name="Operator").exists():
+        return "Operator"
+    return "Manager" if is_manager(user) else "Student"
+
+
 class IsManagerOrReadOnly(BasePermission):
     def has_permission(self, request, view):
-        if request.method in SAFE_METHODS:
-            return True
+        return request.method in SAFE_METHODS or is_manager(request.user)
 
-        user = request.user
 
+class IsManager(BasePermission):
+    def has_permission(self, request, view):
+        return is_manager(request.user)
+
+
+class IsCartOwner(BasePermission):
+    def has_permission(self, request, view):
         return (
-            user.is_authenticated
-            and (
-                user.is_superuser
-                or user.groups.filter(name="Manager").exists()
-            )
+            request.user.is_authenticated
+            and request.user.pk == view.kwargs.get("user_id")
         )

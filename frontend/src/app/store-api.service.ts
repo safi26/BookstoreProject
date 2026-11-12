@@ -6,6 +6,16 @@ export interface ApiCategory {
   category_id: number;
   category_name: string;
   tax_exempt: boolean;
+  student_discount_exempt: boolean;
+  discount_type: 'none' | 'percent' | 'dollar';
+  discount_value: string;
+}
+
+export interface ApiItemVariant {
+  variant_id: number;
+  size: 'XS' | 'S' | 'M' | 'L' | 'XL' | 'XXL' | 'Unspecified';
+  color: 'Blue' | 'Green' | 'Black' | 'Grey' | 'Red' | 'Unspecified';
+  quantity: number;
 }
 
 export interface ApiItem {
@@ -21,25 +31,32 @@ export interface ApiItem {
   category_name: string;
   cover_url: string;
   tax_exempt: boolean;
+  student_discount_exempt: boolean;
+  tax_exempt_from_category: boolean;
+  student_discount_exempt_from_category: boolean;
+  variants: ApiItemVariant[];
 }
 
 export interface ApiCartItem {
   id: number;
   item: number;
+  variant_id: number | null;
+  variant_size: string | null;
+  variant_color: string | null;
   item_details: ApiItem;
   item_name: string;
   item_price: string;
   quantity: number;
   subtotal: string;
   discount_amount: string;
+  customer_discount_amount: string;
   tax_amount: string;
   line_total: string;
 }
 
-export type DiscountType = '' | 'student' | 'employee';
+export type CustomerDiscountType = '' | 'student' | 'employee';
 
-export interface DiscountRequest {
-  role: string;
+export interface CustomerDiscountRequest {
   student_id?: string;
   use_employee_discount?: boolean;
 }
@@ -50,9 +67,10 @@ export interface ApiCart {
   cart_items: ApiCartItem[];
   total_items: number;
   subtotal: string;
-  discount_type: DiscountType;
-  discount_percent: string;
-  discount_amount: string;
+  discount_total: string;
+  customer_discount_type: CustomerDiscountType;
+  customer_discount_percent: string;
+  customer_discount_amount: string;
   tax_amount: string;
   total_price: string;
 }
@@ -60,9 +78,14 @@ export interface ApiCart {
 export interface ApiSaleItem {
   item_name: string;
   item_code: string;
+  variant_size: string;
+  variant_color: string;
   quantity: number;
   unit_price: string;
+  discount_type: 'none' | 'percent' | 'dollar';
+  discount_value: string;
   discount_amount: string;
+  customer_discount_amount: string;
   line_total: string;
   tax_amount: string;
 }
@@ -72,9 +95,10 @@ export interface ApiSaleReceipt {
   issued_at: string;
   items: ApiSaleItem[];
   subtotal: string;
-  discount_type: DiscountType;
-  discount_percent: string;
-  discount_amount: string;
+  discount_total: string;
+  customer_discount_type: CustomerDiscountType;
+  customer_discount_percent: string;
+  customer_discount_amount: string;
   tax_amount: string;
   total: string;
   payment_method: 'cash' | 'card';
@@ -82,9 +106,20 @@ export interface ApiSaleReceipt {
   change_due: string;
 }
 
-export interface CheckoutPayload extends DiscountRequest {
+export interface CheckoutPayload extends CustomerDiscountRequest {
   payment_method: 'cash' | 'card';
   cash_received?: string;
+}
+
+export interface ApiLoginResponse {
+  token: string;
+  user_id: number;
+  role: 'Student' | 'Manager' | 'Operator';
+}
+
+export interface ExemptionSettings {
+  tax_exempt?: boolean;
+  student_discount_exempt?: boolean;
 }
 
 export interface ItemPayload {
@@ -96,13 +131,31 @@ export interface ItemPayload {
   isbn: string;
   badge: string;
   category: number;
-  tax_exempt: boolean;
+  tax_exempt?: boolean;
+  student_discount_exempt?: boolean;
+}
+
+export interface ItemVariantPayload {
+  size: ApiItemVariant['size'];
+  color: string;
+  quantity: number;
 }
 
 @Injectable({ providedIn: 'root' })
 export class StoreApiService {
   private readonly http = inject(HttpClient);
   private readonly apiUrl = '/api';
+
+  login(userId: number, password: string): Observable<ApiLoginResponse> {
+    return this.http.post<ApiLoginResponse>(`${this.apiUrl}/auth/login/`, {
+      user_id: userId,
+      password
+    });
+  }
+
+  logout(): Observable<void> {
+    return this.http.post<void>(`${this.apiUrl}/auth/logout/`, {});
+  }
 
   getCategories(): Observable<ApiCategory[]> {
     return this.http.get<ApiCategory[]>(`${this.apiUrl}/categories/`);
@@ -118,9 +171,18 @@ export class StoreApiService {
     return this.http.delete<void>(`${this.apiUrl}/categories/${categoryId}/`);
   }
 
-  updateCategoryTaxExemption(categoryId: number, taxExempt: boolean): Observable<ApiCategory> {
+  updateCategorySettings(categoryId: number, settings: ExemptionSettings): Observable<ApiCategory> {
+    return this.http.patch<ApiCategory>(`${this.apiUrl}/categories/${categoryId}/`, settings);
+  }
+
+  updateCategoryDiscount(
+    categoryId: number,
+    discountType: 'none' | 'percent' | 'dollar',
+    discountValue: number
+  ): Observable<ApiCategory> {
     return this.http.patch<ApiCategory>(`${this.apiUrl}/categories/${categoryId}/`, {
-      tax_exempt: taxExempt
+      discount_type: discountType,
+      discount_value: discountValue
     });
   }
 
@@ -136,20 +198,36 @@ export class StoreApiService {
     return this.http.put<ApiItem>(`${this.apiUrl}/items/${itemId}/`, payload);
   }
 
-  updateItemTaxExemption(itemId: number, taxExempt: boolean): Observable<ApiItem> {
-    return this.http.patch<ApiItem>(`${this.apiUrl}/items/${itemId}/`, {
-      tax_exempt: taxExempt
-    });
+  updateItemSettings(itemId: number, settings: ExemptionSettings): Observable<ApiItem> {
+    return this.http.patch<ApiItem>(`${this.apiUrl}/items/${itemId}/`, settings);
   }
 
   deleteItem(itemId: number): Observable<void> {
     return this.http.delete<void>(`${this.apiUrl}/items/${itemId}/`);
   }
 
-  getCart(userId: number, discount: DiscountRequest): Observable<ApiCart> {
+  createItemVariant(itemId: number, payload: ItemVariantPayload): Observable<ApiItemVariant> {
+    return this.http.post<ApiItemVariant>(`${this.apiUrl}/items/${itemId}/variants/`, payload);
+  }
+
+  updateItemVariant(
+    itemId: number,
+    variantId: number,
+    payload: ItemVariantPayload
+  ): Observable<ApiItemVariant> {
+    return this.http.patch<ApiItemVariant>(
+      `${this.apiUrl}/items/${itemId}/variants/${variantId}/`,
+      payload
+    );
+  }
+
+  deleteItemVariant(itemId: number, variantId: number): Observable<void> {
+    return this.http.delete<void>(`${this.apiUrl}/items/${itemId}/variants/${variantId}/`);
+  }
+
+  getCart(userId: number, discount: CustomerDiscountRequest): Observable<ApiCart> {
     const params = new HttpParams({
       fromObject: {
-        role: discount.role,
         ...(discount.student_id ? { student_id: discount.student_id } : {}),
         ...(discount.use_employee_discount !== undefined
           ? { use_employee_discount: String(discount.use_employee_discount) }
@@ -159,10 +237,16 @@ export class StoreApiService {
     return this.http.get<ApiCart>(`${this.apiUrl}/users/${userId}/cart/`, { params });
   }
 
-  addCartItem(userId: number, itemId: number, quantity = 1): Observable<ApiCartItem> {
+  addCartItem(
+    userId: number,
+    itemId: number,
+    quantity = 1,
+    variantId?: number
+  ): Observable<ApiCartItem> {
     return this.http.post<ApiCartItem>(`${this.apiUrl}/users/${userId}/cart/items/`, {
       item: itemId,
-      quantity
+      quantity,
+      ...(variantId !== undefined ? { variant_id: variantId } : {})
     });
   }
 

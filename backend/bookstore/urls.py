@@ -4,11 +4,15 @@ from rest_framework.routers import DefaultRouter
 from .views import (
     CategoryViewSet,
     ItemViewSet,
+    ItemVariantCollectionView,
+    ItemVariantDetailView,
     SaleViewSet,
     CartView,
     CartItemCreateView,
     CartItemDetailView,
     CheckoutView,
+    LoginView,
+    LogoutView,
 )
 
 
@@ -34,6 +38,18 @@ router.register(
 
 
 urlpatterns = [
+    path("auth/login/", LoginView.as_view(), name="api-login"),
+    path("auth/logout/", LogoutView.as_view(), name="api-logout"),
+    path(
+        "items/<int:item_id>/variants/",
+        ItemVariantCollectionView.as_view(),
+        name="item-variants",
+    ),
+    path(
+        "items/<int:item_id>/variants/<int:variant_id>/",
+        ItemVariantDetailView.as_view(),
+        name="item-variant-detail",
+    ),
     path(
         "users/<int:user_id>/cart/",
         CartView.as_view(),

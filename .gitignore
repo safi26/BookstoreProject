@@ -11,3 +11,7 @@ venv/
 # Angular build output
 frontend/dist/
 frontend/.certs/
+
+# Windows installer build output
+installer/build/
+installer-output/BookstoreSetup.exe

@@ -17,3 +17,5 @@ types-PyYAML==6.0.12.20260906
 typing_extensions==4.16.0
 tzdata==2026.4
 uritemplate==4.2.0
+waitress==3.0.2
+whitenoise==6.9.0

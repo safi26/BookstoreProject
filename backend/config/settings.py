@@ -10,22 +10,19 @@ For the full list of settings and their values, see
 https://docs.djangoproject.com/en/6.1/ref/settings/
 """
 
+import os
+import secrets
+import sys
 from pathlib import Path
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
+APP_ROOT = Path(sys._MEIPASS) if getattr(sys, "frozen", False) else BASE_DIR
+IS_PACKAGED = os.environ.get("BOOKSTORE_PACKAGED") == "1"
 
-
-# Quick-start development settings - unsuitable for production
-# See https://docs.djangoproject.com/en/6.1/howto/deployment/checklist/
-
-# SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = 'django-insecure-8198y&r2dlb!_op=r_-*&6_xy_%134_9c3(r!#k2u0d%e0hs$p'
-
-# SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
-
-ALLOWED_HOSTS = []
+SECRET_KEY = os.environ.get("DJANGO_SECRET_KEY") or secrets.token_urlsafe(50)
+DEBUG = not IS_PACKAGED
+ALLOWED_HOSTS = ["127.0.0.1", "localhost", "[::1]"]
 
 
 # Application definition
@@ -38,6 +35,7 @@ INSTALLED_APPS = [
     'django.contrib.messages',
     'django.contrib.staticfiles',
     "rest_framework",
+    "rest_framework.authtoken",
     "drf_spectacular",
     "bookstore"
 ]
@@ -51,6 +49,8 @@ MIDDLEWARE = [
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
 ]
+if IS_PACKAGED:
+    MIDDLEWARE.insert(1, "whitenoise.middleware.WhiteNoiseMiddleware")
 
 ROOT_URLCONF = 'config.urls'
 
@@ -75,12 +75,20 @@ WSGI_APPLICATION = 'config.wsgi.application'
 # Database
 # https://docs.djangoproject.com/en/6.1/ref/settings/#databases
 
+DEFAULT_DATA_DIR = (
+    Path(os.environ.get("LOCALAPPDATA") or Path.home() / ".local" / "share")
+    / "CommonplaceBooks"
+    if IS_PACKAGED
+    else BASE_DIR
+)
+DATA_DIR = Path(os.environ.get("BOOKSTORE_DATA_DIR", DEFAULT_DATA_DIR))
 DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.sqlite3',
-        'NAME': BASE_DIR / 'db.sqlite3',
+        'NAME': DATA_DIR / ("bookstore.sqlite3" if IS_PACKAGED else "db.sqlite3"),
     }
 }
+DATA_DIR.mkdir(parents=True, exist_ok=True)
 
 
 # Password validation
@@ -117,7 +125,9 @@ USE_TZ = True
 # Static files (CSS, JavaScript, Images)
 # https://docs.djangoproject.com/en/6.1/howto/static-files/
 
-STATIC_URL = 'static/'
+STATIC_URL = "/static/"
+STATIC_ROOT = Path(os.environ.get("BOOKSTORE_STATIC_ROOT", APP_ROOT / "staticfiles"))
+FRONTEND_DIR = Path(os.environ.get("BOOKSTORE_FRONTEND_DIR", APP_ROOT / "frontend"))
 
 
 # Email
@@ -131,6 +141,12 @@ MAILERS = {
 
 REST_FRAMEWORK = {
     "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
+    "DEFAULT_AUTHENTICATION_CLASSES": [
+        "rest_framework.authentication.TokenAuthentication",
+    ],
+    "DEFAULT_THROTTLE_RATES": {
+        "login": "10/min",
+    },
 }
 
 SPECTACULAR_SETTINGS = {

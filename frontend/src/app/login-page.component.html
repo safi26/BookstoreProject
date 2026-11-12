@@ -17,19 +17,9 @@
 
     <section class="login-form-section" aria-labelledby="login-title">
       <h2 id="login-title">Log in</h2>
-      <p class="form-intro">Choose your account type and enter your details to continue. Use an existing numeric Django user ID to save cart items.</p>
+      <p class="form-intro">Sign in with your Django account. Managers must use an account granted manager access by the bookstore administrator.</p>
 
       <form #loginForm="ngForm" (ngSubmit)="onSubmit()" novalidate>
-        <fieldset class="role-selection">
-          <legend>Sign in as</legend>
-          <div class="role-options">
-            <button *ngFor="let role of userRoles" type="button" class="role-choice"
-              [class.is-selected]="userRole === role"
-              [attr.aria-pressed]="userRole === role"
-              (click)="userRole = role">{{ role }}</button>
-          </div>
-        </fieldset>
-
         <div class="field-group">
           <label for="user-id">User ID</label>
           <input
@@ -71,7 +61,10 @@
           <span class="field-error" *ngIf="passwordField.invalid && passwordField.touched">Enter your password.</span>
         </div>
 
-        <button class="login-submit" type="submit" [disabled]="loginForm.invalid">Log in <span aria-hidden="true">↗</span></button>
+        <p *ngIf="loginError" class="field-error" role="alert">{{ loginError }}</p>
+        <button class="login-submit" type="submit" [disabled]="loginForm.invalid || submitting">
+          {{ submitting ? 'Signing in...' : 'Log in' }} <span aria-hidden="true">↗</span>
+        </button>
       </form>
     </section>
   </main>

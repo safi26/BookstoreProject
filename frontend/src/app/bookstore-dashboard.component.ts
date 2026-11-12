@@ -3,9 +3,29 @@ import { HttpErrorResponse } from '@angular/common/http';
 import { Component, inject } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { Router, RouterLink } from '@angular/router';
-import { forkJoin } from 'rxjs';
+import { catchError, concat, forkJoin, map, of, toArray } from 'rxjs';
 import { AuthService } from './auth.service';
-import { ApiCartItem, ApiItem, ApiSaleReceipt, CheckoutPayload, DiscountRequest, DiscountType, ItemPayload, StoreApiService } from './store-api.service';
+import {
+  ApiCartItem,
+  ApiCategory,
+  ApiItem,
+  ApiItemVariant,
+  ApiSaleReceipt,
+  CheckoutPayload,
+  CustomerDiscountRequest,
+  CustomerDiscountType,
+  ExemptionSettings,
+  ItemPayload,
+  ItemVariantPayload,
+  StoreApiService
+} from './store-api.service';
+
+interface CategoryDiscountDraft {
+  type: 'none' | 'percent' | 'dollar';
+  value: number;
+}
+
+const EXEMPTION_FIELDS: (keyof ExemptionSettings)[] = ['tax_exempt', 'student_discount_exempt'];
 
 interface Book {
   id: number;
@@ -22,6 +42,17 @@ interface Book {
   isProductImage: boolean;
   badge: string;
   taxExempt: boolean;
+  studentDiscountExempt: boolean;
+  // True when the matching flag above was set by the category, not on the item itself.
+  taxExemptFromCategory: boolean;
+  studentDiscountExemptFromCategory: boolean;
+  variants: ApiItemVariant[];
+}
+
+interface VariantDraft {
+  size: ApiItemVariant['size'];
+  color: ApiItemVariant['color'];
+  quantity: number;
 }
 
 interface BookDraft {
@@ -34,14 +65,18 @@ interface BookDraft {
   isbn: string;
   badge: string;
   taxExempt: boolean;
+  studentDiscountExempt: boolean;
 }
 
 interface BagItem {
   book: Book;
   quantity: number;
   cartItemId: number;
+  variantSize: string | null;
+  variantColor: string | null;
   subtotal: number;
   discountAmount: number;
+  customerDiscountAmount: number;
   taxAmount: number;
 }
 
@@ -50,6 +85,9 @@ interface ReceiptItem {
   itemCode: string;
   quantity: number;
   unitPrice: number;
+  discountType: 'none' | 'percent' | 'dollar';
+  discountValue: number;
+  discountAmount: number;
   lineTotal: number;
   taxAmount: number;
   totalWithTax: number;
@@ -60,8 +98,9 @@ interface SaleReceipt {
   issuedAt: string;
   items: ReceiptItem[];
   subtotal: number;
-  discountLabel: string;
-  discountAmount: number;
+  discountTotal: number;
+  customerDiscountLabel: string;
+  customerDiscountAmount: number;
   taxAmount: number;
   total: number;
   paymentMethod: 'cash' | 'card';
@@ -87,6 +126,7 @@ export class BookstoreDashboardComponent {
   readonly isOperator = this.signedInRole === 'Operator';
   readonly canCheckout = this.isStudent || this.isOperator || this.isManager;
   categories: string[] = ['All items'];
+  categoryRecords: ApiCategory[] = [];
   books: Book[] = [];
   loading = true;
   apiError = '';
@@ -106,13 +146,22 @@ export class BookstoreDashboardComponent {
   editingBookId: number | null = null;
   bookDraft: BookDraft = this.createBookDraft();
   bag: BagItem[] = [];
-  bagDiscountLabel = '';
+  bagCustomerDiscountLabel = '';
   cartLoading = false;
   private cartRequestId = 0;
   studentIdInput = '';
   appliedStudentId = '';
   studentIdError = '';
+  studentDiscountNotApplicable = false;
+  appliedStudentDiscountPercent = 0;
   useEmployeeDiscount = true;
+  selectedVariantIds: Record<number, number | null> = {};
+  showVariantManager = false;
+  managedVariantBook: Book | null = null;
+  variantDrafts: Record<number, VariantDraft> = {};
+  newVariantDraft: VariantDraft = this.createVariantDraft();
+  variantError = '';
+  variantSaving = false;
   bagMessage = '';
   checkoutMessage = '';
   showBag = false;
@@ -199,9 +248,23 @@ export class BookstoreDashboardComponent {
   receipt: SaleReceipt | null = null;
   showReceipt = false;
   editorError = '';
-  taxExemptionError = '';
-  taxExemptionUpdating = false;
+  settingsError = '';
+  settingsSaving = false;
+  settingsSavedMessage = '';
+  private settingsSavedTimer: ReturnType<typeof setTimeout> | undefined;
+  // Exemption checkbox changes wait here until the manager selects Save changes.
+  private readonly pendingCategorySettings = new Map<number, ExemptionSettings>();
+  private readonly pendingItemSettings = new Map<number, ExemptionSettings>();
+  categoryDiscountDrafts: Record<number, CategoryDiscountDraft> = {};
+  categoryDiscountSavingIds = new Set<number>();
+  categoryDiscountErrors: Record<number, string> = {};
   cancellingTransaction = false;
+  readonly apparelSizes: ApiItemVariant['size'][] = [
+    'XS', 'S', 'M', 'L', 'XL', 'XXL', 'Unspecified'
+  ];
+  readonly apparelColors: ApiItemVariant['color'][] = [
+    'Blue', 'Green', 'Black', 'Grey', 'Red'
+  ];
 
   constructor() {
     this.loadCatalog();
@@ -238,9 +301,122 @@ export class BookstoreDashboardComponent {
     return categoryItems.slice(0, 4);
   }
 
+  get unsavedSettingsCount(): number {
+    return [...this.pendingCategorySettings.values(), ...this.pendingItemSettings.values()]
+      .reduce((count, settings) => count + Object.keys(settings).length, 0);
+  }
+
   get selectedCategoryTaxExempt(): boolean {
     const categoryId = this.categoryIds.get(this.selectedCategory);
-    return categoryId === undefined ? false : this.categoryTaxExemptById.get(categoryId) ?? false;
+    return categoryId !== undefined && this.categorySetting(categoryId, 'tax_exempt');
+  }
+
+  get selectedCategoryStudentDiscountExempt(): boolean {
+    const categoryId = this.categoryIds.get(this.selectedCategory);
+    return categoryId !== undefined && this.categorySetting(categoryId, 'student_discount_exempt');
+  }
+
+  // True when the item's category has this exemption on, so the item checkbox is locked and checked.
+  isCategoryExempt(book: Book, field: keyof ExemptionSettings): boolean {
+    return this.categorySetting(book.categoryId, field);
+  }
+
+  isItemSettingChecked(book: Book, field: keyof ExemptionSettings): boolean {
+    return this.isCategoryExempt(book, field) ||
+      (this.pendingItemSettings.get(book.id)?.[field] ?? this.itemOwnSetting(book, field));
+  }
+
+  hasUnsavedItemSetting(book: Book, field: keyof ExemptionSettings): boolean {
+    return this.pendingItemSettings.get(book.id)?.[field] !== undefined;
+  }
+
+  hasUnsavedCategorySetting(field: keyof ExemptionSettings): boolean {
+    const categoryId = this.categoryIds.get(this.selectedCategory);
+    return categoryId !== undefined &&
+      this.pendingCategorySettings.get(categoryId)?.[field] !== undefined;
+  }
+
+  setCategorySetting(field: keyof ExemptionSettings, event: Event): void {
+    const categoryId = this.categoryIds.get(this.selectedCategory);
+    const target = event.target;
+    if (!this.isManager || categoryId === undefined || !(target instanceof HTMLInputElement)) {
+      return;
+    }
+
+    const saved = this.categoryDiscountsById.get(categoryId)?.[field] ?? false;
+    this.stageSetting(this.pendingCategorySettings, categoryId, field, target.checked, saved);
+  }
+
+  setItemSetting(book: Book, field: keyof ExemptionSettings, event: Event): void {
+    const target = event.target;
+    if (!this.isManager || !(target instanceof HTMLInputElement)) {
+      return;
+    }
+
+    this.stageSetting(
+      this.pendingItemSettings, book.id, field, target.checked, this.itemOwnSetting(book, field)
+    );
+  }
+
+  saveSettings(): void {
+    if (!this.isManager || this.settingsSaving || this.unsavedSettingsCount === 0) {
+      return;
+    }
+
+    // Each request clears its own pending entry, so a partial failure keeps only the failed changes.
+    // Items save first so they are recorded as the item's own choice; the category saves after
+    // and skips them, so checking both in one save cannot cancel either out.
+    const requests = [
+      ...[...this.pendingItemSettings].map(([itemId, settings]) =>
+        this.storeApi.updateItemSettings(itemId, settings).pipe(
+          map(item => {
+            const book = this.books.find(candidate => candidate.id === itemId);
+            if (book) {
+              this.applyItemExemptions(book, item);
+            }
+            this.pendingItemSettings.delete(itemId);
+            return true;
+          }),
+          catchError(() => of(false))
+        )
+      ),
+      ...[...this.pendingCategorySettings].map(([categoryId, settings]) =>
+        this.storeApi.updateCategorySettings(categoryId, settings).pipe(
+          map(category => {
+            this.applyCategory(category);
+            for (const field of EXEMPTION_FIELDS) {
+              if (settings[field] !== undefined) {
+                this.mirrorCategoryCascade(categoryId, field, category[field]);
+              }
+            }
+            this.pendingCategorySettings.delete(categoryId);
+            return true;
+          }),
+          catchError(() => of(false))
+        )
+      )
+    ];
+
+    this.settingsSaving = true;
+    this.settingsError = '';
+    concat(...requests).pipe(toArray()).subscribe(results => {
+      this.settingsSaving = false;
+      if (results.every(Boolean)) {
+        this.showSettingsSaved();
+      } else {
+        this.settingsError = 'Some changes could not be saved. They are still marked as unsaved.';
+      }
+    });
+  }
+
+  discardSettings(): void {
+    if (this.settingsSaving) {
+      return;
+    }
+
+    this.pendingCategorySettings.clear();
+    this.pendingItemSettings.clear();
+    this.settingsError = '';
   }
 
   isBookTaxExempt(book: Book): boolean {
@@ -279,19 +455,39 @@ export class BookstoreDashboardComponent {
   }
 
   get bagSubtotal(): number {
-    return this.bag.reduce((total, item) => total + item.subtotal, 0);
+    return this.bag.reduce(
+      (total, item) => total + this.discountedLineSubtotalCents(item),
+      0
+    ) / 100;
+  }
+
+  get bagOriginalSubtotal(): number {
+    return this.bag.reduce(
+      (total, item) => total + this.originalLineSubtotalCents(item),
+      0
+    ) / 100;
+  }
+
+  get bagDiscountTotal(): number {
+    return this.bag.reduce(
+      (total, item) => total + this.discountAmountCents(item),
+      0
+    ) / 100;
   }
 
   get bagTax(): number {
-    return this.bag.reduce((total, item) => total + item.taxAmount, 0);
+    return this.bag.reduce((total, item) => total + Math.round(item.taxAmount * 100), 0) / 100;
   }
 
-  get bagDiscount(): number {
-    return this.bag.reduce((total, item) => total + item.discountAmount, 0);
+  get bagCustomerDiscount(): number {
+    return this.bag.reduce(
+      (total, item) => total + Math.round(item.customerDiscountAmount * 100),
+      0
+    ) / 100;
   }
 
   get bagTotal(): number {
-    return Math.round((this.bagSubtotal - this.bagDiscount + this.bagTax) * 100) / 100;
+    return Math.round((this.bagSubtotal - this.bagCustomerDiscount + this.bagTax) * 100) / 100;
   }
 
   get studentIdBlocksPayment(): boolean {
@@ -366,6 +562,56 @@ export class BookstoreDashboardComponent {
         : this.cashReceived !== null && Number(this.cashReceived) >= this.bagTotal);
   }
 
+  getItemDiscountAmount(item: BagItem): number {
+    return this.discountAmountCents(item) / 100;
+  }
+
+  hasCategoryDiscount(book: Book): boolean {
+    const discount = this.categoryDiscountsById.get(book.categoryId);
+    return Boolean(discount && discount.discount_type !== 'none');
+  }
+
+  isApparel(book: Book): boolean {
+    return book.category.toLowerCase() === 'apparel';
+  }
+
+  selectedVariantId(book: Book): number | null {
+    return this.selectedVariantIds[book.id] ?? null;
+  }
+
+  hasAvailableVariants(book: Book): boolean {
+    return book.variants.some(variant => variant.quantity > 0);
+  }
+
+  isVariantAvailable(book: Book): boolean {
+    if (!this.isApparel(book)) {
+      return book.quantity > 0;
+    }
+
+    const variantId = this.selectedVariantId(book);
+    return variantId !== null &&
+      book.variants.some(variant => variant.variant_id === variantId && variant.quantity > 0);
+  }
+
+  categoryDiscountDescription(book: Book): string {
+    const discount = this.categoryDiscountsById.get(book.categoryId);
+    if (!discount || discount.discount_type === 'none') {
+      return '';
+    }
+
+    return discount.discount_type === 'percent'
+      ? `${Number(discount.discount_value)}% off`
+      : `$${Number(discount.discount_value).toFixed(2)} off`;
+  }
+
+  getItemDiscountedSubtotal(item: BagItem): number {
+    return this.discountedLineSubtotalCents(item) / 100;
+  }
+
+  isItemDiscountCapped(item: BagItem): boolean {
+    return this.discountAmountCents(item) === this.originalLineSubtotalCents(item);
+  }
+
   selectPaymentMethod(method: 'cash' | 'card'): void {
     this.paymentMethod = method;
     this.checkoutMessage = '';
@@ -393,6 +639,16 @@ export class BookstoreDashboardComponent {
     }
   }
 
+  removeStudentId(): void {
+    this.studentIdInput = '';
+    this.studentIdError = '';
+    this.loadCart('');
+  }
+
+  trackBagItem(_index: number, item: BagItem): number {
+    return item.cartItemId;
+  }
+
   onEmployeeDiscountChange(): void {
     this.loadCart();
   }
@@ -401,6 +657,7 @@ export class BookstoreDashboardComponent {
     this.studentIdInput = '';
     this.appliedStudentId = '';
     this.studentIdError = '';
+    this.studentDiscountNotApplicable = false;
     this.useEmployeeDiscount = true;
   }
 
@@ -435,6 +692,12 @@ export class BookstoreDashboardComponent {
       } else {
         this.itemCodeMessage = `No item found for "${query}".`;
       }
+      return;
+    }
+
+    if (this.isApparel(book)) {
+      this.selectedCategory = book.category;
+      this.itemCodeMessage = `Choose a size and color for ${book.title} from its item card.`;
       return;
     }
 
@@ -476,7 +739,21 @@ export class BookstoreDashboardComponent {
     }
   }
 
-  addToBag(book: Book): void {
+  addToBag(book: Book, variantId = this.selectedVariantId(book)): void {
+    if (this.isApparel(book) && variantId === null) {
+      this.bagMessage = `Choose a size and color for ${book.title}.`;
+      return;
+    }
+
+    if (this.isApparel(book)) {
+      const variant = book.variants.find(item => item.variant_id === variantId);
+      if (!variant || variant.quantity < 1) {
+        this.selectedVariantIds[book.id] = null;
+        this.bagMessage = `That size and color is out of stock for ${book.title}. Choose an available combination.`;
+        return;
+      }
+    }
+
     const userId = this.authService.currentUserId;
     if (userId === null) {
       this.bagMessage = 'Use a numeric Django user ID to save items to your cart.';
@@ -486,7 +763,7 @@ export class BookstoreDashboardComponent {
       return;
     }
 
-    this.storeApi.addCartItem(userId, book.id).subscribe({
+    this.storeApi.addCartItem(userId, book.id, 1, variantId ?? undefined).subscribe({
       next: () => {
         this.loadCart();
         this.bagMessage = `${book.title} added to your bag.`;
@@ -634,17 +911,26 @@ export class BookstoreDashboardComponent {
       number: receipt.receipt_number,
       issuedAt: new Date(receipt.issued_at).toLocaleString(),
       items: receipt.items.map(item => ({
-        title: item.item_name,
+        title: item.variant_size
+          ? `${item.item_name} — ${item.variant_size}, ${item.variant_color}`
+          : item.item_name,
         itemCode: item.item_code,
         quantity: item.quantity,
         unitPrice: Number(item.unit_price),
+        discountType: item.discount_type,
+        discountValue: Number(item.discount_value),
+        discountAmount: Number(item.discount_amount) + Number(item.customer_discount_amount),
         lineTotal: Number(item.line_total),
         taxAmount: Number(item.tax_amount),
         totalWithTax: Number(item.line_total) + Number(item.tax_amount)
       })),
       subtotal: Number(receipt.subtotal),
-      discountLabel: this.discountLabel(receipt.discount_type, receipt.discount_percent),
-      discountAmount: Number(receipt.discount_amount),
+      discountTotal: Number(receipt.discount_total),
+      customerDiscountLabel: this.customerDiscountLabel(
+        receipt.customer_discount_type,
+        receipt.customer_discount_percent
+      ),
+      customerDiscountAmount: Number(receipt.customer_discount_amount),
       taxAmount: Number(receipt.tax_amount),
       total: Number(receipt.total),
       paymentMethod: receipt.payment_method,
@@ -708,7 +994,8 @@ export class BookstoreDashboardComponent {
       quantity: book.quantity,
       isbn: book.isbn,
       badge: book.badge,
-      taxExempt: book.taxExempt
+      taxExempt: book.taxExempt,
+      studentDiscountExempt: book.studentDiscountExempt
     } : this.createBookDraft();
     this.editorError = '';
     this.showBookEditor = true;
@@ -733,21 +1020,34 @@ export class BookstoreDashboardComponent {
 
     const payload: ItemPayload = {
       item: this.bookDraft.title.trim(),
-      item_quantity: Number(this.bookDraft.quantity),
+      item_quantity: category === 'Apparel' && this.editingBookId === null
+        ? 0
+        : Number(this.bookDraft.quantity),
       item_price: Number(this.bookDraft.price),
       author: this.bookDraft.author.trim(),
       item_code: this.bookDraft.itemCode.trim(),
       isbn: this.bookDraft.isbn.trim(),
       badge: this.bookDraft.badge.trim(),
-      category: categoryId,
-      tax_exempt: this.bookDraft.taxExempt
+      category: categoryId
     };
+    // Only send exemptions the manager changed: anything sent becomes the item's own choice.
+    const original = this.books.find(book => book.id === this.editingBookId);
+    if (!original || this.bookDraft.taxExempt !== original.taxExempt) {
+      payload.tax_exempt = this.bookDraft.taxExempt;
+    }
+    if (!original || this.bookDraft.studentDiscountExempt !== original.studentDiscountExempt) {
+      payload.student_discount_exempt = this.bookDraft.studentDiscountExempt;
+    }
 
     const request = this.editingBookId === null
       ? this.storeApi.createItem(payload)
       : this.storeApi.updateItem(this.editingBookId, payload);
+    const editedBookId = this.editingBookId;
     request.subscribe({
       next: () => {
+        if (editedBookId !== null) {
+          this.pendingItemSettings.delete(editedBookId);
+        }
         this.closeBookEditor();
         this.loadCatalog();
       },
@@ -761,8 +1061,126 @@ export class BookstoreDashboardComponent {
     }
 
     this.storeApi.deleteItem(book.id).subscribe({
-      next: () => this.loadCatalog(),
+      next: () => {
+        this.pendingItemSettings.delete(book.id);
+        this.loadCatalog();
+      },
       error: error => this.apiError = this.getApiError(error, 'Could not remove this item.')
+    });
+  }
+
+  openVariantManager(book: Book): void {
+    if (!this.isManager || !this.isApparel(book)) {
+      return;
+    }
+
+    this.managedVariantBook = book;
+    this.variantDrafts = Object.fromEntries(book.variants.map(variant => [
+      variant.variant_id,
+      {
+        size: variant.size,
+        color: variant.color,
+        quantity: variant.quantity
+      }
+    ]));
+    this.newVariantDraft = this.createVariantDraft();
+    this.variantError = '';
+    this.showVariantManager = true;
+  }
+
+  closeVariantManager(): void {
+    this.showVariantManager = false;
+    this.managedVariantBook = null;
+    this.variantDrafts = {};
+    this.variantError = '';
+  }
+
+  createVariant(): void {
+    const book = this.managedVariantBook;
+    if (!this.isManager || !book || this.variantSaving || !this.isVariantDraftValid(this.newVariantDraft)) {
+      this.variantError = 'Choose a size, enter a color, and use a whole-number stock quantity.';
+      return;
+    }
+
+    this.variantSaving = true;
+    this.variantError = '';
+    this.storeApi.createItemVariant(book.id, this.toVariantPayload(this.newVariantDraft)).subscribe({
+      next: variant => {
+        book.variants = [...book.variants, variant];
+        book.quantity += variant.quantity;
+        this.variantDrafts[variant.variant_id] = {
+          size: variant.size,
+          color: variant.color,
+          quantity: variant.quantity
+        };
+        this.newVariantDraft = this.createVariantDraft();
+        this.variantSaving = false;
+        this.loadCatalog();
+      },
+      error: error => {
+        this.variantError = this.getApiError(error, 'Could not add this size and color.');
+        this.variantSaving = false;
+      }
+    });
+  }
+
+  saveVariant(variant: ApiItemVariant): void {
+    const book = this.managedVariantBook;
+    const draft = this.variantDrafts[variant.variant_id];
+    if (!this.isManager || !book || !draft || this.variantSaving) {
+      return;
+    }
+    if (!this.isVariantDraftValid(draft)) {
+      this.variantError = 'Choose a size, enter a color, and use a whole-number stock quantity.';
+      return;
+    }
+
+    this.variantSaving = true;
+    this.variantError = '';
+    this.storeApi.updateItemVariant(
+      book.id,
+      variant.variant_id,
+      this.toVariantPayload(draft)
+    ).subscribe({
+      next: updated => {
+        const previousQuantity = variant.quantity;
+        Object.assign(variant, updated);
+        book.quantity += updated.quantity - previousQuantity;
+        this.variantDrafts[variant.variant_id] = {
+          size: updated.size,
+          color: updated.color,
+          quantity: updated.quantity
+        };
+        this.variantSaving = false;
+        this.loadCatalog();
+      },
+      error: error => {
+        this.variantError = this.getApiError(error, 'Could not save this size and color.');
+        this.variantSaving = false;
+      }
+    });
+  }
+
+  deleteVariant(variant: ApiItemVariant): void {
+    const book = this.managedVariantBook;
+    if (!this.isManager || !book || this.variantSaving) {
+      return;
+    }
+
+    this.variantSaving = true;
+    this.variantError = '';
+    this.storeApi.deleteItemVariant(book.id, variant.variant_id).subscribe({
+      next: () => {
+        book.variants = book.variants.filter(item => item.variant_id !== variant.variant_id);
+        book.quantity -= variant.quantity;
+        delete this.variantDrafts[variant.variant_id];
+        this.variantSaving = false;
+        this.loadCatalog();
+      },
+      error: error => {
+        this.variantError = this.getApiError(error, 'Could not remove this size and color.');
+        this.variantSaving = false;
+      }
     });
   }
 
@@ -786,12 +1204,10 @@ export class BookstoreDashboardComponent {
     this.categoryError = '';
     this.storeApi.createCategory(categoryName).subscribe({
       next: category => {
-        this.categoryIds.set(category.category_name, category.category_id);
-        this.categoryTaxExemptById.set(category.category_id, category.tax_exempt);
-        this.categories = [
-          'All items',
-          ...this.categories.slice(1).concat(category.category_name).sort((a, b) => a.localeCompare(b))
-        ];
+        this.applyCategory(category);
+        this.categoryRecords = [...this.categoryRecords, category]
+          .sort((a, b) => a.category_name.localeCompare(b.category_name));
+        this.categories = ['All items', ...this.categoryRecords.map(item => item.category_name)];
         this.selectedCategory = category.category_name;
         this.categoryDraft = '';
         this.showCategoryCreator = false;
@@ -834,6 +1250,13 @@ export class BookstoreDashboardComponent {
       next: () => {
         this.categoryIds.delete(categoryName);
         this.categoryTaxExemptById.delete(categoryId);
+        this.categoryDiscountsById.delete(categoryId);
+        this.pendingCategorySettings.delete(categoryId);
+        delete this.categoryDiscountDrafts[categoryId];
+        delete this.categoryDiscountErrors[categoryId];
+        this.categoryRecords = this.categoryRecords.filter(
+          category => category.category_id !== categoryId
+        );
         this.categories = this.categories.filter(category => category !== categoryName);
         if (this.selectedCategory === categoryName) {
           this.selectedCategory = 'All items';
@@ -847,51 +1270,39 @@ export class BookstoreDashboardComponent {
     });
   }
 
-  setCategoryTaxExempt(event: Event): void {
-    if (!this.isManager || this.taxExemptionUpdating) {
+  saveCategoryDiscount(categoryId: number): void {
+    if (!this.isManager || this.categoryDiscountSavingIds.has(categoryId)) {
       return;
     }
 
-    const categoryId = this.categoryIds.get(this.selectedCategory);
-    const target = event.target;
-    if (categoryId === undefined || !(target instanceof HTMLInputElement)) {
+    const draft = this.categoryDiscountDrafts[categoryId];
+    if (!draft) {
       return;
     }
 
-    this.taxExemptionUpdating = true;
-    this.taxExemptionError = '';
-    this.storeApi.updateCategoryTaxExemption(categoryId, target.checked).subscribe({
+    if (
+      !Number.isFinite(draft.value) ||
+      draft.value < 0 ||
+      draft.value > 99999999.99 ||
+      (draft.type === 'percent' && draft.value > 100) ||
+      Math.abs(draft.value * 100 - Math.round(draft.value * 100)) >= 0.00000001
+    ) {
+      this.categoryDiscountErrors[categoryId] =
+        'Enter a non-negative discount with at most two decimal places; percent discounts must be 100% or less.';
+      return;
+    }
+
+    this.categoryDiscountSavingIds.add(categoryId);
+    delete this.categoryDiscountErrors[categoryId];
+    this.storeApi.updateCategoryDiscount(categoryId, draft.type, draft.value).subscribe({
       next: category => {
-        this.categoryTaxExemptById.set(category.category_id, category.tax_exempt);
-        this.taxExemptionUpdating = false;
+        this.applyCategory(category);
+        this.categoryDiscountSavingIds.delete(categoryId);
       },
       error: error => {
-        this.taxExemptionError = this.getApiError(error, 'Could not update this category exemption.');
-        this.taxExemptionUpdating = false;
-      }
-    });
-  }
-
-  setItemTaxExempt(book: Book, event: Event): void {
-    if (!this.isManager || this.taxExemptionUpdating) {
-      return;
-    }
-
-    const target = event.target;
-    if (!(target instanceof HTMLInputElement)) {
-      return;
-    }
-
-    this.taxExemptionUpdating = true;
-    this.taxExemptionError = '';
-    this.storeApi.updateItemTaxExemption(book.id, target.checked).subscribe({
-      next: item => {
-        book.taxExempt = item.tax_exempt;
-        this.taxExemptionUpdating = false;
-      },
-      error: error => {
-        this.taxExemptionError = this.getApiError(error, 'Could not update this item exemption.');
-        this.taxExemptionUpdating = false;
+        this.categoryDiscountErrors[categoryId] =
+          this.getApiError(error, 'Could not save this category discount.');
+        this.categoryDiscountSavingIds.delete(categoryId);
       }
     });
   }
@@ -904,8 +1315,12 @@ export class BookstoreDashboardComponent {
   }
 
   signOut(): void {
-    this.authService.signOut();
-    void this.router.navigateByUrl('/');
+    this.authService.signOut().subscribe({
+      next: () => void this.router.navigateByUrl('/'),
+      error: error => {
+        this.apiError = this.getApiError(error, 'Could not sign out. Please try again.');
+      }
+    });
   }
 
   private createBookDraft(): BookDraft {
@@ -923,12 +1338,114 @@ export class BookstoreDashboardComponent {
       quantity: 1,
       isbn: '',
       badge: '',
-      taxExempt: false
+      taxExempt: false,
+      studentDiscountExempt: false
+    };
+  }
+
+  private createVariantDraft(): VariantDraft {
+    return { size: 'M', color: 'Blue', quantity: 0 };
+  }
+
+  private isVariantDraftValid(draft: VariantDraft): boolean {
+    return this.apparelColors.includes(draft.color) &&
+      Number.isInteger(Number(draft.quantity)) &&
+      Number(draft.quantity) >= 0;
+  }
+
+  private toVariantPayload(draft: VariantDraft): ItemVariantPayload {
+    return {
+      size: draft.size,
+      color: draft.color,
+      quantity: Number(draft.quantity)
     };
   }
 
   private readonly categoryIds = new Map<string, number>();
   private readonly categoryTaxExemptById = new Map<number, boolean>();
+  private readonly categoryDiscountsById = new Map<number, ApiCategory>();
+
+  // The exemption the item has on its own, ignoring anything its category set.
+  private itemOwnSetting(book: Book, field: keyof ExemptionSettings): boolean {
+    return field === 'tax_exempt'
+      ? book.taxExempt && !book.taxExemptFromCategory
+      : book.studentDiscountExempt && !book.studentDiscountExemptFromCategory;
+  }
+
+  private applyItemExemptions(book: Book, item: ApiItem): void {
+    book.taxExempt = item.tax_exempt;
+    book.studentDiscountExempt = item.student_discount_exempt;
+    book.taxExemptFromCategory = item.tax_exempt_from_category;
+    book.studentDiscountExemptFromCategory = item.student_discount_exempt_from_category;
+  }
+
+  // Same rule as Category.save on the backend: items marked individually are left alone.
+  private mirrorCategoryCascade(categoryId: number, field: keyof ExemptionSettings, value: boolean): void {
+    for (const book of this.books) {
+      if (book.categoryId !== categoryId) {
+        continue;
+      }
+      if (field === 'tax_exempt') {
+        if (value && !book.taxExempt) {
+          book.taxExempt = book.taxExemptFromCategory = true;
+        } else if (!value && book.taxExemptFromCategory) {
+          book.taxExempt = book.taxExemptFromCategory = false;
+        }
+      } else if (value && !book.studentDiscountExempt) {
+        book.studentDiscountExempt = book.studentDiscountExemptFromCategory = true;
+      } else if (!value && book.studentDiscountExemptFromCategory) {
+        book.studentDiscountExempt = book.studentDiscountExemptFromCategory = false;
+      }
+    }
+  }
+
+  private categorySetting(categoryId: number, field: keyof ExemptionSettings): boolean {
+    return this.pendingCategorySettings.get(categoryId)?.[field] ??
+      this.categoryDiscountsById.get(categoryId)?.[field] ??
+      false;
+  }
+
+  private stageSetting(
+    pending: Map<number, ExemptionSettings>,
+    id: number,
+    field: keyof ExemptionSettings,
+    value: boolean,
+    saved: boolean
+  ): void {
+    const settings = { ...pending.get(id) };
+    if (value === saved) {
+      delete settings[field];
+    } else {
+      settings[field] = value;
+    }
+
+    if (Object.keys(settings).length > 0) {
+      pending.set(id, settings);
+    } else {
+      pending.delete(id);
+    }
+    this.settingsError = '';
+    this.settingsSavedMessage = '';
+  }
+
+  private showSettingsSaved(): void {
+    clearTimeout(this.settingsSavedTimer);
+    this.settingsSavedMessage = 'Settings saved';
+    this.settingsSavedTimer = setTimeout(() => this.settingsSavedMessage = '', 2500);
+  }
+
+  private applyCategory(category: ApiCategory): void {
+    this.categoryIds.set(category.category_name, category.category_id);
+    this.categoryTaxExemptById.set(category.category_id, category.tax_exempt);
+    this.categoryDiscountsById.set(category.category_id, category);
+    this.categoryDiscountDrafts[category.category_id] = {
+      type: category.discount_type,
+      value: Number(category.discount_value)
+    };
+    this.categoryRecords = this.categoryRecords.map(existing =>
+      existing.category_id === category.category_id ? category : existing
+    );
+  }
 
   private loadCatalog(): void {
     this.loading = true;
@@ -940,12 +1457,22 @@ export class BookstoreDashboardComponent {
       next: ({ categories, items }) => {
         this.categoryIds.clear();
         this.categoryTaxExemptById.clear();
+        this.categoryDiscountsById.clear();
+        this.categoryDiscountDrafts = {};
+        this.categoryRecords = categories;
         for (const category of categories) {
-          this.categoryIds.set(category.category_name, category.category_id);
-          this.categoryTaxExemptById.set(category.category_id, category.tax_exempt);
+          this.applyCategory(category);
         }
         this.categories = ['All items', ...categories.map(category => category.category_name)];
         this.books = items.map(item => this.toBook(item));
+        for (const book of this.books) {
+          if (
+            this.selectedVariantIds[book.id] !== undefined &&
+            !book.variants.some(variant => variant.variant_id === this.selectedVariantIds[book.id])
+          ) {
+            this.selectedVariantIds[book.id] = null;
+          }
+        }
         this.loading = false;
         if (this.authService.currentUserId !== null) {
           this.loadCart();
@@ -974,7 +1501,11 @@ export class BookstoreDashboardComponent {
       coverFailed: false,
       isProductImage: !hasBookCover,
       badge: item.badge,
-      taxExempt: item.tax_exempt
+      taxExempt: item.tax_exempt,
+      studentDiscountExempt: item.student_discount_exempt,
+      taxExemptFromCategory: item.tax_exempt_from_category,
+      studentDiscountExemptFromCategory: item.student_discount_exempt_from_category,
+      variants: item.variants ?? []
     };
   }
 
@@ -1012,15 +1543,14 @@ export class BookstoreDashboardComponent {
     });
   }
 
-  private discountRequest(studentId: string): DiscountRequest {
+  private discountRequest(studentId: string): CustomerDiscountRequest {
     return {
-      role: this.signedInRole,
       ...(this.isStudent && studentId ? { student_id: studentId } : {}),
       ...(this.isManager ? { use_employee_discount: this.useEmployeeDiscount } : {})
     };
   }
 
-  private discountLabel(discountType: DiscountType, percent: string): string {
+  private customerDiscountLabel(discountType: CustomerDiscountType, percent: string): string {
     if (!discountType) {
       return '';
     }
@@ -1045,13 +1575,24 @@ export class BookstoreDashboardComponent {
 
         this.cartLoading = false;
         this.appliedStudentId = studentId;
-        this.bagDiscountLabel = this.discountLabel(cart.discount_type, cart.discount_percent);
+        this.studentIdInput = studentId;
+        this.appliedStudentDiscountPercent = Number(cart.customer_discount_percent);
+        this.bagCustomerDiscountLabel = this.customerDiscountLabel(
+          cart.customer_discount_type,
+          cart.customer_discount_percent
+        );
+        this.studentDiscountNotApplicable = cart.customer_discount_type === 'student' &&
+          cart.cart_items.length > 0 &&
+          Number(cart.customer_discount_amount) === 0;
         this.bag = cart.cart_items.map((cartItem: ApiCartItem) => ({
           book: this.toBook(cartItem.item_details),
           quantity: cartItem.quantity,
           cartItemId: cartItem.id,
+          variantSize: cartItem.variant_size,
+          variantColor: cartItem.variant_color,
           subtotal: Number(cartItem.subtotal),
           discountAmount: Number(cartItem.discount_amount),
+          customerDiscountAmount: Number(cartItem.customer_discount_amount),
           taxAmount: Number(cartItem.tax_amount)
         }));
       },
@@ -1072,11 +1613,31 @@ export class BookstoreDashboardComponent {
     });
   }
 
+  private originalLineSubtotalCents(item: BagItem): number {
+    return Math.round(item.book.price * 100) * item.quantity;
+  }
+
+  private discountAmountCents(item: BagItem): number {
+    return Math.round(item.discountAmount * 100);
+  }
+
+  private discountedLineSubtotalCents(item: BagItem): number {
+    return Math.round(item.subtotal * 100);
+  }
+
   private getApiError(error: unknown, fallback: string): string {
     if (error instanceof HttpErrorResponse) {
-      const detail = error.error?.error ?? error.error?.detail;
+      const errorBody = error.error;
+      const detail = errorBody?.error ??
+        errorBody?.detail ??
+        (errorBody && typeof errorBody === 'object'
+          ? Object.values(errorBody)[0]
+          : undefined);
       if (typeof detail === 'string') {
         return detail;
+      }
+      if (Array.isArray(detail) && typeof detail[0] === 'string') {
+        return detail[0];
       }
     }
 

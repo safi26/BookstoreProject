@@ -512,6 +512,38 @@ class DiscountApiTests(APITestCase):
 		self.assertEqual(response.data["customer_discount_percent"], "20.00")
 		self.assertEqual(response.data["customer_discount_amount"], "5.00")
 
+	def test_employee_discount_skips_exempt_categories(self):
+		self.join_group("Manager")
+		self.category.employee_discount_exempt = True
+		self.category.save(update_fields=["employee_discount_exempt"])
+		other_category = Category.objects.create(category_name="Stationery")
+		other_item = Item.objects.create(
+			item="Notebook",
+			item_quantity=3,
+			item_price=Decimal("10.00"),
+			category=other_category,
+		)
+		CartItem.objects.create(cart=self.cart_item.cart, item=other_item, quantity=1)
+
+		response = self.checkout(use_employee_discount=True)
+
+		self.assertEqual(response.status_code, 201)
+		self.assertEqual(response.data["customer_discount_type"], "employee")
+		self.assertEqual(response.data["customer_discount_amount"], "2.00")
+		receipt_items = {line["item_name"]: line for line in response.data["items"]}
+		self.assertEqual(receipt_items["Test Book"]["customer_discount_amount"], "0.00")
+		self.assertEqual(receipt_items["Notebook"]["customer_discount_amount"], "2.00")
+
+	def test_employee_category_exemption_does_not_change_student_discount(self):
+		self.category.employee_discount_exempt = True
+		self.category.save(update_fields=["employee_discount_exempt"])
+
+		response = self.checkout(student_id="S1001")
+
+		self.assertEqual(response.status_code, 201)
+		self.assertEqual(response.data["customer_discount_type"], "student")
+		self.assertEqual(response.data["customer_discount_amount"], "2.50")
+
 	def test_no_student_id_gets_no_discount(self):
 		response = self.checkout()
 

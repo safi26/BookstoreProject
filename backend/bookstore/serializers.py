@@ -14,6 +14,7 @@ class CategorySerializer(serializers.ModelSerializer):
             "category_name",
             "tax_exempt",
             "student_discount_exempt",
+            "employee_discount_exempt",
             "discount_type",
             "discount_value",
         ]

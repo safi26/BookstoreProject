@@ -55,6 +55,12 @@
             (change)="setCategorySetting('student_discount_exempt', $event)" />
           <span>No student discount for this category</span>
         </label>
+        <label *ngIf="selectedCategory !== 'All items'" class="tax-exemption-toggle"
+          [class.is-unsaved]="hasUnsavedCategorySetting('employee_discount_exempt')">
+          <input type="checkbox" [checked]="selectedCategoryEmployeeDiscountExempt" [disabled]="settingsSaving"
+            (change)="setCategorySetting('employee_discount_exempt', $event)" />
+          <span>No employee discount for this category</span>
+        </label>
       </div>
       <form *ngIf="isManager && showCategoryCreator" class="category-create-form" (ngSubmit)="createCategory()">
         <label for="new-category-name">New category name</label>

@@ -56,6 +56,8 @@ def price_line(item, quantity, customer_discount_type=None):
         item.student_discount_exempt or item.category.student_discount_exempt
     ):
         customer_discount_type = None
+    elif customer_discount_type == "employee" and item.category.employee_discount_exempt:
+        customer_discount_type = None
     rate = CUSTOMER_DISCOUNT_RATES.get(customer_discount_type, Decimal("0"))
     customer_discount = (subtotal * rate).quantize(CENT, rounding=ROUND_HALF_UP)
     tax = calculate_amount_tax(item, subtotal - customer_discount)

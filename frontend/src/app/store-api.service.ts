@@ -7,6 +7,7 @@ export interface ApiCategory {
   category_name: string;
   tax_exempt: boolean;
   student_discount_exempt: boolean;
+  employee_discount_exempt: boolean;
   discount_type: 'none' | 'percent' | 'dollar';
   discount_value: string;
 }
@@ -120,7 +121,10 @@ export interface ApiLoginResponse {
 export interface ExemptionSettings {
   tax_exempt?: boolean;
   student_discount_exempt?: boolean;
+  employee_discount_exempt?: boolean;
 }
+
+type ItemExemptionSettings = Pick<ExemptionSettings, 'tax_exempt' | 'student_discount_exempt'>;
 
 export interface ItemPayload {
   item: string;
@@ -198,7 +202,7 @@ export class StoreApiService {
     return this.http.put<ApiItem>(`${this.apiUrl}/items/${itemId}/`, payload);
   }
 
-  updateItemSettings(itemId: number, settings: ExemptionSettings): Observable<ApiItem> {
+  updateItemSettings(itemId: number, settings: ItemExemptionSettings): Observable<ApiItem> {
     return this.http.patch<ApiItem>(`${this.apiUrl}/items/${itemId}/`, settings);
   }
 

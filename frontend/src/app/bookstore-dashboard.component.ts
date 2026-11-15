@@ -316,6 +316,11 @@ export class BookstoreDashboardComponent {
     return categoryId !== undefined && this.categorySetting(categoryId, 'student_discount_exempt');
   }
 
+  get selectedCategoryEmployeeDiscountExempt(): boolean {
+    const categoryId = this.categoryIds.get(this.selectedCategory);
+    return categoryId !== undefined && this.categorySetting(categoryId, 'employee_discount_exempt');
+  }
+
   // True when the item's category has this exemption on, so the item checkbox is locked and checked.
   isCategoryExempt(book: Book, field: keyof ExemptionSettings): boolean {
     return this.categorySetting(book.categoryId, field);

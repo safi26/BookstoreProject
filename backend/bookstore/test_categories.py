@@ -51,6 +51,25 @@ class StoreCategoryDefaultsApiTests(APITestCase):
         self.assertEqual(disabled.status_code, 200)
         self.assertFalse(disabled.data["tax_exempt"])
 
+    def test_category_employee_discount_exemption_can_be_toggled_through_api(self):
+        category = Category.objects.create(category_name="Employee discount test")
+
+        enabled = self.client.patch(
+            f"/api/categories/{category.category_id}/",
+            {"employee_discount_exempt": True},
+            format="json",
+        )
+        self.assertEqual(enabled.status_code, 200)
+        self.assertTrue(enabled.data["employee_discount_exempt"])
+
+        disabled = self.client.patch(
+            f"/api/categories/{category.category_id}/",
+            {"employee_discount_exempt": False},
+            format="json",
+        )
+        self.assertEqual(disabled.status_code, 200)
+        self.assertFalse(disabled.data["employee_discount_exempt"])
+
     def test_anonymous_user_cannot_modify_categories(self):
         category = Category.objects.create(category_name="Protected category")
         self.client.force_authenticate(user=None)

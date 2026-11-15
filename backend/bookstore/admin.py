@@ -5,7 +5,13 @@ from .permissions import is_manager
 
 @admin.register(Category)
 class CategoryAdmin(admin.ModelAdmin):
-    list_display = ("category_id", "category_name", "tax_exempt", "student_discount_exempt")
+    list_display = (
+        "category_id",
+        "category_name",
+        "tax_exempt",
+        "student_discount_exempt",
+        "employee_discount_exempt",
+    )
     search_fields = ("category_name",)
 
     def has_add_permission(self, request):

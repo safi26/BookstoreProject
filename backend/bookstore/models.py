@@ -13,6 +13,7 @@ class Category(models.Model):
     category_name = models.CharField(max_length=200)
     tax_exempt = models.BooleanField(default=False)
     student_discount_exempt = models.BooleanField(default=False)
+    employee_discount_exempt = models.BooleanField(default=False)
     discount_type = models.CharField(max_length=10, choices=DISCOUNT_TYPES, default="none")
     discount_value = models.DecimalField(max_digits=10, decimal_places=2, default=0)
 

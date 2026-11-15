@@ -2,8 +2,40 @@ from decimal import Decimal
 
 from rest_framework import serializers
 
-from .models import Category, Item, ItemVariant, Cart, CartItem, Sale, SaleItem
+from .models import (
+    Category,
+    CourseSupplyBundle,
+    Item,
+    ItemVariant,
+    Cart,
+    CartItem,
+    CashDrawer,
+    Sale,
+    SaleItem,
+)
 from .pricing import customer_discount_percent, price_line
+
+
+class CashDrawerSerializer(serializers.ModelSerializer):
+    is_low = serializers.SerializerMethodField()
+
+    class Meta:
+        model = CashDrawer
+        fields = ["balance", "low_change_threshold", "is_low"]
+        read_only_fields = ["is_low"]
+
+    def get_is_low(self, obj):
+        return obj.balance < obj.low_change_threshold
+
+    def validate(self, attrs):
+        balance = attrs.get("balance", getattr(self.instance, "balance", Decimal("0.00")))
+        threshold = attrs.get(
+            "low_change_threshold",
+            getattr(self.instance, "low_change_threshold", Decimal("100.00")),
+        )
+        if balance < 0 or threshold < 0:
+            raise serializers.ValidationError("Drawer amounts cannot be negative.")
+        return attrs
 
 
 class CategorySerializer(serializers.ModelSerializer):
@@ -165,6 +197,37 @@ class ItemSerializer(serializers.ModelSerializer):
             return ""
 
         return f"https://covers.openlibrary.org/b/isbn/{obj.isbn}-L.jpg"
+
+
+class CourseSupplyBundleSerializer(serializers.ModelSerializer):
+    items = serializers.PrimaryKeyRelatedField(
+        many=True,
+        queryset=Item.objects.select_related("category").all(),
+        allow_empty=False,
+    )
+
+    class Meta:
+        model = CourseSupplyBundle
+        fields = ["id", "name", "items"]
+        read_only_fields = ["id"]
+
+    def validate_name(self, value):
+        name = value.strip()
+        matching = CourseSupplyBundle.objects.filter(name__iexact=name)
+        if self.instance:
+            matching = matching.exclude(pk=self.instance.pk)
+        if matching.exists():
+            raise serializers.ValidationError("A bundle with this name already exists.")
+        return name
+
+    def validate_items(self, items):
+        if len({item.pk for item in items}) != len(items):
+            raise serializers.ValidationError("Select each catalog item only once.")
+        if any(item.is_apparel for item in items):
+            raise serializers.ValidationError(
+                "Apparel cannot be included in a course supply bundle."
+            )
+        return items
 
 
 class CartItemSerializer(serializers.ModelSerializer):

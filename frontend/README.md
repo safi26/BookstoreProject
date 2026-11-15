@@ -13,6 +13,21 @@ the authenticated cart owner. Run `python3 manage.py migrate` in `backend/` to
 create the token-auth tables. Create accounts through Django admin or
 `python3 manage.py createsuperuser`.
 
+### Staff PIN verification for discount overrides
+
+Managers must configure a separate staff PIN before an account can approve
+student-ID or employee-discount overrides. In Django admin, open **Staff
+credentials**, choose an active Manager or Operator account, and set a PIN of
+4–12 digits. PINs are stored as password hashes and are never displayed again;
+leave the PIN field blank when editing to keep the current PIN. To change it,
+enter a new PIN and save.
+
+When an override is requested, a staff member enters their numeric Django user
+ID and PIN. Invalid credentials are rejected. Successful verification
+authorizes override requests for five minutes and is rate-limited to five
+attempts per minute per IP address. The authorization is separate from the shopper's account,
+so the shopper's cart and checkout identity do not change.
+
 ### Local development accounts
 
 These accounts exist in the current local development database and may not be
@@ -33,6 +48,49 @@ and their passwords are not suitable for production.
 
 Only manager-configured category discounts are accepted at checkout. Students
 cannot submit line discounts themselves.
+
+Managers can create named course supply bundles from non-apparel catalog
+items, such as a class kit. Adding a bundle adds one of each component as
+individual cart items. Available items are added, and any unavailable items
+are called out by name.
+
+### Cash drawer change warning
+
+Managers can set the cash drawer's opening/current balance and the minimum
+balance for a low-change warning from the store page. The warning is visible to
+Managers and Operators whenever the recorded balance is below that threshold.
+Successful cash checkouts add the sale total to the drawer balance (cash
+received less change returned); card checkouts do not affect it. Set the opening
+balance to the amount physically counted when starting a drawer. Drawer balance
+and threshold are shared across the store and persisted in Django.
+After a student applies an ID with staff PIN verification, the cash checkout
+shows a warning if the projected drawer balance after the sale and change is
+below the manager-set threshold. Students cannot read drawer details without a
+valid staff verification token.
+
+### Daily sales report
+
+Managers can open **Daily sales report** from the store page and select a date
+to see that day's completed sale count, total sales collected (after discounts
+and including tax), receipt details, and sales totals by item category.
+Category totals include each sold line's tax and reflect its final discounted
+selling price.
+
+Managers can open **Best-selling items** and choose an inclusive start and end
+date to see items ranked by total quantity sold. Apparel size/color variants
+are combined under their catalog item.
+
+Students can request staff removal of a cart item using the **Remove item
+(staff)** action. A Manager or Operator must verify their staff ID and PIN;
+the removal audit stores the student and staff IDs, item/variant details,
+quantity, and server timestamp. The audit is available read-only in Django
+admin.
+
+Staff can use **Change price (staff)** on a student's cart item to update the
+catalog price used by the current transaction and future sales. The staff
+member must verify their ID and PIN and enter a reason. The audit records the
+original and new price, reason, student/staff IDs, and timestamp; completed
+sales receipts remain unchanged.
 
 ### Apparel size and color inventory
 

@@ -1,5 +1,6 @@
 from django.db import models, transaction
 from django.conf import settings
+from django.contrib.auth.hashers import check_password, make_password
 from django.db.models import Q
 
 class Category(models.Model):
@@ -112,6 +113,20 @@ class Item(models.Model):
         return self.category.category_name.casefold() == "apparel"
 
 
+class CourseSupplyBundle(models.Model):
+    name = models.CharField(max_length=120, unique=True)
+    items = models.ManyToManyField(
+        Item,
+        related_name="course_supply_bundles",
+    )
+
+    class Meta:
+        ordering = ["name"]
+
+    def __str__(self):
+        return self.name
+
+
 class ItemVariant(models.Model):
     SIZES = [
         ("XS", "XS"),
@@ -209,6 +224,46 @@ class CartItem(models.Model):
         return f"{self.item.item} x {self.quantity}"
 
 
+class StaffCartItemRemoval(models.Model):
+    student_user_id = models.PositiveIntegerField()
+    staff_user_id = models.PositiveIntegerField()
+    cart_item_id = models.PositiveIntegerField()
+    item_name = models.CharField(max_length=200)
+    item_code = models.CharField(max_length=30, blank=True, default="")
+    variant_size = models.CharField(max_length=20, blank=True, default="")
+    variant_color = models.CharField(max_length=40, blank=True, default="")
+    quantity_removed = models.PositiveIntegerField()
+    removed_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-removed_at", "-pk"]
+        verbose_name = "Staff cart item removal"
+        verbose_name_plural = "Staff cart item removals"
+
+    def __str__(self):
+        return f"{self.item_name} removed by staff {self.staff_user_id}"
+
+
+class StaffCartItemPriceChange(models.Model):
+    student_user_id = models.PositiveIntegerField()
+    staff_user_id = models.PositiveIntegerField()
+    cart_item_id = models.PositiveIntegerField()
+    item_name = models.CharField(max_length=200)
+    item_code = models.CharField(max_length=30, blank=True, default="")
+    original_price = models.DecimalField(max_digits=5, decimal_places=2)
+    new_price = models.DecimalField(max_digits=5, decimal_places=2)
+    reason = models.CharField(max_length=500)
+    changed_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-changed_at", "-pk"]
+        verbose_name = "Staff cart item price change"
+        verbose_name_plural = "Staff cart item price changes"
+
+    def __str__(self):
+        return f"{self.item_name}: {self.original_price} to {self.new_price}"
+
+
 class StudentId(models.Model):
     student_id = models.CharField(max_length=30, unique=True)
     is_active = models.BooleanField(default=True)
@@ -219,6 +274,36 @@ class StudentId(models.Model):
     class Meta:
         verbose_name = "Student ID"
         verbose_name_plural = "Student IDs"
+
+
+class StaffCredential(models.Model):
+    user = models.OneToOneField(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="staff_credential",
+    )
+    pin_hash = models.CharField(max_length=128)
+
+    def set_pin(self, pin):
+        self.pin_hash = make_password(pin)
+
+    def check_pin(self, pin):
+        return check_password(pin, self.pin_hash)
+
+    def __str__(self):
+        return f"Staff PIN for {self.user}"
+
+
+class CashDrawer(models.Model):
+    balance = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    low_change_threshold = models.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        default=100,
+    )
+
+    def __str__(self):
+        return "Store cash drawer"
 
 
 class Sale(models.Model):

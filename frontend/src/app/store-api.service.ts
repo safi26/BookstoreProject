@@ -1,4 +1,4 @@
-import { HttpClient, HttpParams } from '@angular/common/http';
+import { HttpClient, HttpHeaders, HttpParams } from '@angular/common/http';
 import { Injectable, inject } from '@angular/core';
 import { Observable } from 'rxjs';
 
@@ -10,6 +10,12 @@ export interface ApiCategory {
   employee_discount_exempt: boolean;
   discount_type: 'none' | 'percent' | 'dollar';
   discount_value: string;
+}
+
+export interface ApiCourseSupplyBundle {
+  id: number;
+  name: string;
+  items: number[];
 }
 
 export interface ApiItemVariant {
@@ -118,6 +124,47 @@ export interface ApiLoginResponse {
   role: 'Student' | 'Manager' | 'Operator';
 }
 
+export interface ApiStaffPinVerification {
+  staff_authorization: string;
+  expires_in: number;
+}
+
+export interface ApiStaffCartItemRemoval {
+  staff_id: number;
+  removed_at: string;
+  item_name: string;
+  quantity_removed: number;
+}
+
+export interface ApiStaffCartItemPriceChange {
+  staff_id: number;
+  changed_at: string;
+  item_name: string;
+  original_price: string;
+  new_price: string;
+  reason: string;
+}
+
+export interface ApiCashDrawer {
+  balance: string;
+  low_change_threshold: string;
+  is_low: boolean;
+}
+
+export interface ApiDailySalesReport {
+  date: string;
+  total_money_taken_in: string;
+  sales_count: number;
+  category_breakdown: { category: string; total: string }[];
+  receipts: ApiSaleReceipt[];
+}
+
+export interface ApiBestSellingItemsReport {
+  start_date: string;
+  end_date: string;
+  items: { item_name: string; item_code: string; quantity_sold: number }[];
+}
+
 export interface ExemptionSettings {
   tax_exempt?: boolean;
   student_discount_exempt?: boolean;
@@ -154,6 +201,27 @@ export class StoreApiService {
     return this.http.post<ApiLoginResponse>(`${this.apiUrl}/auth/login/`, {
       user_id: userId,
       password
+    });
+  }
+
+  verifyStaffPin(staffId: number, pin: string): Observable<ApiStaffPinVerification> {
+    return this.http.post<ApiStaffPinVerification>(`${this.apiUrl}/auth/staff/verify-pin/`, {
+      staff_id: staffId,
+      pin
+    });
+  }
+
+  getCashDrawer(staffAuthorization: string | null = null): Observable<ApiCashDrawer> {
+    const headers = staffAuthorization
+      ? new HttpHeaders({ 'X-Staff-Authorization': staffAuthorization })
+      : undefined;
+    return this.http.get<ApiCashDrawer>(`${this.apiUrl}/cash-drawer/`, { headers });
+  }
+
+  updateCashDrawer(balance: number, lowChangeThreshold: number): Observable<ApiCashDrawer> {
+    return this.http.patch<ApiCashDrawer>(`${this.apiUrl}/cash-drawer/`, {
+      balance,
+      low_change_threshold: lowChangeThreshold
     });
   }
 
@@ -194,6 +262,32 @@ export class StoreApiService {
     return this.http.get<ApiItem[]>(`${this.apiUrl}/items/`);
   }
 
+  getCourseSupplyBundles(): Observable<ApiCourseSupplyBundle[]> {
+    return this.http.get<ApiCourseSupplyBundle[]>(`${this.apiUrl}/bundles/`);
+  }
+
+  createCourseSupplyBundle(name: string, itemIds: number[]): Observable<ApiCourseSupplyBundle> {
+    return this.http.post<ApiCourseSupplyBundle>(`${this.apiUrl}/bundles/`, {
+      name,
+      items: itemIds
+    });
+  }
+
+  updateCourseSupplyBundle(
+    bundleId: number,
+    name: string,
+    itemIds: number[]
+  ): Observable<ApiCourseSupplyBundle> {
+    return this.http.patch<ApiCourseSupplyBundle>(`${this.apiUrl}/bundles/${bundleId}/`, {
+      name,
+      items: itemIds
+    });
+  }
+
+  deleteCourseSupplyBundle(bundleId: number): Observable<void> {
+    return this.http.delete<void>(`${this.apiUrl}/bundles/${bundleId}/`);
+  }
+
   createItem(payload: ItemPayload): Observable<ApiItem> {
     return this.http.post<ApiItem>(`${this.apiUrl}/items/`, payload);
   }
@@ -229,7 +323,11 @@ export class StoreApiService {
     return this.http.delete<void>(`${this.apiUrl}/items/${itemId}/variants/${variantId}/`);
   }
 
-  getCart(userId: number, discount: CustomerDiscountRequest): Observable<ApiCart> {
+  getCart(
+    userId: number,
+    discount: CustomerDiscountRequest,
+    staffAuthorization: string | null = null
+  ): Observable<ApiCart> {
     const params = new HttpParams({
       fromObject: {
         ...(discount.student_id ? { student_id: discount.student_id } : {}),
@@ -238,7 +336,10 @@ export class StoreApiService {
           : {})
       }
     });
-    return this.http.get<ApiCart>(`${this.apiUrl}/users/${userId}/cart/`, { params });
+    const headers = staffAuthorization
+      ? new HttpHeaders({ 'X-Staff-Authorization': staffAuthorization })
+      : undefined;
+    return this.http.get<ApiCart>(`${this.apiUrl}/users/${userId}/cart/`, { params, headers });
   }
 
   addCartItem(
@@ -262,16 +363,63 @@ export class StoreApiService {
     return this.http.delete<void>(`${this.apiUrl}/users/${userId}/cart/items/${cartItemId}/`);
   }
 
+  removeCartItemAsStaff(
+    userId: number,
+    cartItemId: number,
+    staffAuthorization: string
+  ): Observable<ApiStaffCartItemRemoval> {
+    const headers = new HttpHeaders({ 'X-Staff-Authorization': staffAuthorization });
+    return this.http.post<ApiStaffCartItemRemoval>(
+      `${this.apiUrl}/users/${userId}/cart/items/${cartItemId}/staff-remove/`,
+      {},
+      { headers }
+    );
+  }
+
+  changeCartItemPriceAsStaff(
+    userId: number,
+    cartItemId: number,
+    newPrice: number,
+    reason: string,
+    staffAuthorization: string
+  ): Observable<ApiStaffCartItemPriceChange> {
+    const headers = new HttpHeaders({ 'X-Staff-Authorization': staffAuthorization });
+    return this.http.post<ApiStaffCartItemPriceChange>(
+      `${this.apiUrl}/users/${userId}/cart/items/${cartItemId}/staff-price-change/`,
+      { new_price: newPrice, reason },
+      { headers }
+    );
+  }
+
   clearCart(userId: number): Observable<void> {
     return this.http.delete<void>(`${this.apiUrl}/users/${userId}/cart/`);
   }
 
-  checkout(userId: number, payload: CheckoutPayload): Observable<ApiSaleReceipt> {
-    return this.http.post<ApiSaleReceipt>(`${this.apiUrl}/users/${userId}/checkout/`, payload);
+  checkout(
+    userId: number,
+    payload: CheckoutPayload,
+    staffAuthorization: string | null = null
+  ): Observable<ApiSaleReceipt> {
+    const headers = staffAuthorization
+      ? new HttpHeaders({ 'X-Staff-Authorization': staffAuthorization })
+      : undefined;
+    return this.http.post<ApiSaleReceipt>(`${this.apiUrl}/users/${userId}/checkout/`, payload, { headers });
   }
 
   getSales(): Observable<ApiSaleReceipt[]> {
     return this.http.get<ApiSaleReceipt[]>(`${this.apiUrl}/sales/`);
+  }
+
+  getDailySalesReport(date: string): Observable<ApiDailySalesReport> {
+    const params = new HttpParams().set('date', date);
+    return this.http.get<ApiDailySalesReport>(`${this.apiUrl}/reports/daily-sales/`, { params });
+  }
+
+  getBestSellingItemsReport(startDate: string, endDate: string): Observable<ApiBestSellingItemsReport> {
+    const params = new HttpParams()
+      .set('start_date', startDate)
+      .set('end_date', endDate);
+    return this.http.get<ApiBestSellingItemsReport>(`${this.apiUrl}/reports/best-selling-items/`, { params });
   }
 
   getSale(receiptNumber: string): Observable<ApiSaleReceipt> {

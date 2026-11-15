@@ -117,6 +117,73 @@
   font-weight: 700;
 }
 
+.cash-drawer-warning {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  margin: 20px 0 0;
+  padding: 14px 16px;
+  border: 1px solid #d59b60;
+  border-left: 4px solid #b75a31;
+  background: #fff5e8;
+  color: #713c23;
+  font-size: 13px;
+}
+
+.cash-drawer-warning strong {
+  font-weight: 700;
+}
+
+.cash-drawer-settings {
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) minmax(300px, 2fr);
+  gap: 14px 22px;
+  align-items: end;
+  margin: 20px 0 0;
+  padding: 16px;
+  border: 1px solid #d8e2d9;
+  background: #f7f9f5;
+}
+
+.cash-drawer-settings h2 {
+  margin: 4px 0;
+  font-family: 'Playfair Display', Georgia, serif;
+  font-size: 21px;
+}
+
+.cash-drawer-settings p {
+  margin: 4px 0 0;
+  color: #53695d;
+  font-size: 11px;
+}
+
+.cash-drawer-form {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: end;
+  gap: 10px;
+}
+
+.cash-drawer-form label {
+  display: block;
+  margin-bottom: 5px;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.cash-drawer-form .cash-input-row input {
+  width: 100%;
+}
+
+.cash-drawer-form .manager-primary {
+  grid-column: 1 / -1;
+}
+
+.cash-drawer-settings > .payment-error,
+.cash-drawer-settings > [role='status'] {
+  grid-column: 1 / -1;
+}
+
 .logout-trigger {
   min-height: 36px;
   padding: 0 10px;
@@ -378,6 +445,43 @@
   box-shadow: 0 18px 54px rgba(20, 44, 34, 0.25);
 }
 
+.staff-pin-scrim {
+  z-index: 30;
+}
+
+.staff-pin-dialog {
+  z-index: 31;
+}
+
+.staff-pin-form {
+  display: grid;
+  gap: 9px;
+  margin-top: 18px;
+}
+
+.staff-pin-form input {
+  min-height: 42px;
+  padding: 8px 10px;
+  border: 1px solid #cdd8d0;
+  border-radius: 2px;
+  font: inherit;
+}
+
+.staff-pin-form textarea {
+  width: 100%;
+  min-height: 76px;
+  padding: 8px;
+  border: 1px solid #cbd7cd;
+  border-radius: 2px;
+  color: #19352f;
+  font: inherit;
+  resize: vertical;
+}
+
+.staff-pin-form .card-dialog-actions {
+  margin-top: 8px;
+}
+
 .card-dialog .card-payment {
   margin: 18px 0 12px;
 }
@@ -432,6 +536,7 @@
 
 .item-code-control {
   display: flex;
+  align-items: center;
   min-width: min(100%, 280px);
   flex: 1 1 320px;
   gap: 9px;
@@ -525,6 +630,7 @@
 
 .student-action {
   min-height: var(--action-height);
+  flex: 0 0 auto;
   padding: 0 15px;
   border: 1px solid #315e4a;
   border-radius: var(--action-radius);
@@ -555,6 +661,207 @@
   gap: 12px;
   margin-top: 22px;
   margin-bottom: 24px;
+}
+
+.manager-catalog-filters {
+  display: grid;
+  flex: 1 1 380px;
+  grid-template-columns: minmax(150px, 0.75fr) minmax(0, 1.25fr);
+  align-items: end;
+  gap: 12px;
+}
+
+.manager-catalog-filters .catalog-filter {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 5px;
+}
+
+.manager-catalog-filters .catalog-filter select {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+}
+
+.manager-catalog-filters .book-search {
+  width: 100%;
+  min-width: 0;
+}
+
+.course-bundles {
+  display: grid;
+  gap: 18px;
+  margin: 26px 0;
+  padding: 21px;
+  border: 1px solid #d5e0d7;
+  border-radius: 4px;
+  background: #f9fbf8;
+}
+
+.course-bundles-heading,
+.course-bundle-card-heading,
+.course-bundle-form-actions,
+.course-bundle-manager-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.course-bundles-heading h3 {
+  margin: 8px 0 0;
+  color: #1b3931;
+  font-family: 'Playfair Display', Georgia, serif;
+  font-size: 25px;
+  font-weight: 500;
+}
+
+.course-bundles-heading > p,
+.course-bundle-message {
+  margin: 0;
+  color: #405a4d;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.course-bundle-editor > summary {
+  width: fit-content;
+  color: #29463c;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.course-bundle-form {
+  display: grid;
+  gap: 13px;
+  max-width: 720px;
+  margin-top: 13px;
+}
+
+.course-bundle-form > label {
+  display: grid;
+  gap: 6px;
+  color: #405a4d;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.course-bundle-form > label input {
+  width: min(100%, 380px);
+  min-height: 38px;
+  padding: 0 10px;
+  border: 1px solid #cbd7cd;
+  border-radius: var(--action-radius);
+  color: #1b3931;
+  font: inherit;
+}
+
+.course-bundle-form fieldset {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  gap: 8px 14px;
+  padding: 12px;
+  border: 1px solid #dce5dd;
+  border-radius: var(--action-radius);
+}
+
+.course-bundle-form legend {
+  padding: 0 5px;
+  color: #405a4d;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.course-bundle-choice {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #29463c;
+  font-size: 11px;
+}
+
+.course-bundle-choice small {
+  margin-left: 4px;
+  color: #687a6e;
+}
+
+.course-bundle-form-actions {
+  justify-content: flex-start;
+}
+
+.course-bundle-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+  gap: 13px;
+}
+
+.course-bundle-card {
+  display: grid;
+  align-content: start;
+  gap: 12px;
+  padding: 15px;
+  border: 1px solid #dce5dd;
+  border-radius: var(--action-radius);
+  background: #fff;
+}
+
+.course-bundle-card-heading h4 {
+  margin: 0;
+  color: #1b3931;
+  font-family: 'Playfair Display', Georgia, serif;
+  font-size: 18px;
+  font-weight: 500;
+}
+
+.course-bundle-manager-actions {
+  justify-content: flex-end;
+  gap: 5px;
+}
+
+.course-bundle-manager-actions .manager-secondary,
+.course-bundle-manager-actions .remove-category {
+  min-height: 28px;
+  padding: 0 7px;
+  font-size: 9px;
+}
+
+.course-bundle-card ul {
+  display: grid;
+  gap: 7px;
+  margin: 0;
+  padding: 0;
+  color: #405a4d;
+  font-size: 11px;
+  list-style: none;
+}
+
+.course-bundle-card li {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.course-bundle-card li strong {
+  color: #52695d;
+  font-size: 10px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.course-bundle-card li strong.is-out-of-stock {
+  color: #a23c2b;
+}
+
+.course-bundle-card > .manager-primary {
+  justify-content: center;
+}
+
+.course-bundle-message {
+  padding: 10px 12px;
+  border-left: 3px solid #315e4a;
+  background: #e8eee8;
 }
 
 .manager-secondary {
@@ -1486,6 +1793,7 @@
   height: 100dvh;
   flex-direction: column;
   padding: 28px;
+  overflow: hidden;
   background: #fff;
   box-shadow: -12px 0 38px rgba(20, 44, 34, 0.12);
   animation: bag-enter 200ms ease-out both;
@@ -1541,7 +1849,7 @@
 }
 
 .bag-items {
-  min-height: 0;
+  min-height: 130px;
   flex: 1;
   overflow-y: auto;
 }
@@ -1645,6 +1953,28 @@
   text-underline-offset: 3px;
 }
 
+.change-item-price {
+  margin-top: 6px;
+  padding: 5px 8px;
+  border: 1px solid #cbd7cd;
+  border-radius: 2px;
+  background: #fff;
+  color: #315e4a;
+  cursor: pointer;
+  font: inherit;
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.change-item-price:hover:not(:disabled) {
+  background: #edf3ee;
+}
+
+.change-item-price:disabled {
+  cursor: wait;
+  opacity: 0.55;
+}
+
 .quantity-control {
   display: inline-flex;
   height: 27px;
@@ -1671,8 +2001,11 @@
 }
 
 .bag-checkout {
-  flex: 0 0 auto;
+  max-height: 60dvh;
+  flex: 0 1 auto;
   margin-top: auto;
+  overflow-y: auto;
+  overscroll-behavior: contain;
   padding-top: 20px;
   border-top: 1px solid #e0e8e1;
 }
@@ -1768,16 +2101,40 @@
   margin-bottom: 12px;
 }
 
-.student-id-entry > label {
-  color: #29463c;
-  font-size: 12px;
-  font-weight: 600;
-}
-
 .bag-checkout > .student-id-entry {
   display: grid;
   gap: 7px;
   justify-content: stretch;
+}
+
+.student-id-details {
+  border: 1px solid #e0e8e1;
+  background: #fbfcfa;
+}
+
+.student-id-details > summary {
+  display: flex;
+  min-height: 38px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 7px 10px;
+  color: #29463c;
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 600;
+  list-style-position: inside;
+}
+
+.student-id-summary-value {
+  color: #315e4a;
+  font-size: 10px;
+}
+
+.student-id-details-content {
+  display: grid;
+  gap: 7px;
+  padding: 0 10px 9px;
 }
 
 .student-id-row {
@@ -2041,7 +2398,6 @@
 .receipt-total {
   display: grid;
   gap: 9px;
-  margin: 17px 0;
 }
 
 .receipt-total > div {
@@ -2172,6 +2528,40 @@
 
 .sales-history-dialog {
   width: min(820px, calc(100vw - 32px));
+}
+
+.daily-report-summary .sales-record-heading {
+  align-items: center;
+}
+
+.daily-report-date-form {
+  display: flex;
+  align-items: flex-end;
+  gap: 10px;
+  margin-bottom: 18px;
+}
+
+.daily-report-date-form label {
+  display: grid;
+  gap: 6px;
+  color: #405a4d;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.daily-report-date-form input {
+  min-height: 36px;
+  padding: 0 8px;
+  border: 1px solid #c9d7cc;
+  border-radius: 3px;
+  color: #19352f;
+  font: inherit;
+}
+
+.best-selling-date-range {
+  margin: 0 0 12px;
+  color: #53695d;
+  font-size: 11px;
 }
 
 .sales-history-search {
@@ -2355,6 +2745,20 @@
 }
 
 @media (max-width: 680px) {
+  .cash-drawer-settings {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .cash-drawer-form {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .cash-drawer-form .manager-primary,
+  .cash-drawer-settings > .payment-error,
+  .cash-drawer-settings > [role='status'] {
+    grid-column: auto;
+  }
+
   .bookstore-shell {
     width: min(100% - 36px, 560px);
   }
@@ -2442,6 +2846,18 @@
   }
 
   .item-code-control {
+    align-items: stretch;
+    flex: 0 0 auto;
+    flex-direction: column;
+    width: 100%;
+  }
+
+  .item-code-input-wrap {
+    width: 100%;
+    flex: 0 0 auto;
+  }
+
+  .student-action {
     width: 100%;
   }
 
@@ -2450,6 +2866,35 @@
     flex-direction: column;
     margin-top: 21px;
     padding: 0;
+  }
+
+  .manager-catalog-filters {
+    width: 100%;
+    flex: 0 0 auto;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 10px;
+  }
+
+  .manager-catalog-filters .catalog-filter select {
+    width: 100%;
+  }
+
+  .course-bundles {
+    padding: 15px;
+  }
+
+  .course-bundles-heading {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .course-bundle-list,
+  .course-bundle-form fieldset {
+    grid-template-columns: 1fr;
+  }
+
+  .course-bundle-card-heading {
+    align-items: flex-start;
   }
 
   .manager-primary {

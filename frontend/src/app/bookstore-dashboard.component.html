@@ -14,6 +14,45 @@
   </header>
 
   <main>
+    <section *ngIf="(isManager || isOperator) && cashDrawer?.is_low"
+      class="cash-drawer-warning" role="alert" aria-live="assertive">
+      <strong>Low change in the cash drawer.</strong>
+      <span>Current drawer balance {{ cashDrawer?.balance | currency:'USD' }} is below the manager-set threshold of
+        {{ cashDrawer?.low_change_threshold | currency:'USD' }}.</span>
+    </section>
+    <section *ngIf="isManager" class="cash-drawer-settings" aria-labelledby="cash-drawer-title">
+      <div>
+        <p class="store-kicker">Register</p>
+        <h2 id="cash-drawer-title">Cash drawer</h2>
+        <p *ngIf="cashDrawer">Current balance {{ cashDrawer.balance | currency:'USD' }} · Alert below
+          {{ cashDrawer.low_change_threshold | currency:'USD' }}</p>
+      </div>
+      <form class="cash-drawer-form" (ngSubmit)="saveCashDrawerSettings()">
+        <div>
+          <label for="cash-drawer-balance">Opening/current balance</label>
+          <div class="cash-input-row">
+            <span>$</span>
+            <input id="cash-drawer-balance" name="cashDrawerBalance" type="number" min="0" max="99999999.99"
+              step="0.01" required [(ngModel)]="cashDrawerBalanceDraft" [disabled]="cashDrawerLoading || cashDrawerSaving" />
+          </div>
+        </div>
+        <div>
+          <label for="cash-drawer-threshold">Warn when below</label>
+          <div class="cash-input-row">
+            <span>$</span>
+            <input id="cash-drawer-threshold" name="cashDrawerThreshold" type="number" min="0" max="99999999.99"
+              step="0.01" required [(ngModel)]="cashDrawerThresholdDraft" [disabled]="cashDrawerLoading || cashDrawerSaving" />
+          </div>
+        </div>
+        <button class="manager-primary" type="submit"
+          [disabled]="cashDrawerLoading || cashDrawerSaving || cashDrawerBalanceDraft === null || cashDrawerThresholdDraft === null">
+          {{ cashDrawerSaving ? 'Saving...' : 'Save drawer settings' }}
+        </button>
+      </form>
+      <p *ngIf="cashDrawerError" class="payment-error" role="alert">{{ cashDrawerError }}</p>
+      <p *ngIf="cashDrawerMessage" role="status">{{ cashDrawerMessage }}</p>
+    </section>
+
     <section class="book-section" id="books" aria-labelledby="books-title">
       <div class="book-section-heading">
         <div>
@@ -25,24 +64,28 @@
 
       <div class="manager-tools" *ngIf="isManager">
         <button class="manager-primary" type="button" (click)="openBookEditor()">Add item <span aria-hidden="true">+</span></button>
+        <button class="manager-secondary" type="button" (click)="openDailySalesReport()">Daily sales report</button>
+        <button class="manager-secondary" type="button" (click)="openBestSellingItemsReport()">Best-selling items</button>
         <button class="manager-secondary" type="button" (click)="openSalesHistory()">Sales history</button>
         <button class="manager-secondary" type="button" [disabled]="creatingCategory"
           (click)="showCategoryCreator = !showCategoryCreator; categoryError = ''">
           {{ showCategoryCreator ? 'Close category form' : 'Add category' }} <span aria-hidden="true">{{ showCategoryCreator ? '×' : '+' }}</span>
         </button>
-        <label class="catalog-filter">
-          <span>Category</span>
-          <select name="managerCategoryFilter" [(ngModel)]="selectedCategory">
-            <option>All items</option>
-            <option *ngFor="let category of categories.slice(1)">{{ category }}</option>
-          </select>
-        </label>
-        <label class="book-search">
-          <span aria-hidden="true">⌕</span>
-          <span class="visually-hidden">Search inventory</span>
-          <input type="search" name="inventorySearch" [(ngModel)]="searchTerm"
-            placeholder="Search item, code, or category" />
-        </label>
+        <div class="manager-catalog-filters">
+          <label class="catalog-filter">
+            <span>Category</span>
+            <select name="managerCategoryFilter" [(ngModel)]="selectedCategory">
+              <option>All items</option>
+              <option *ngFor="let category of categories.slice(1)">{{ category }}</option>
+            </select>
+          </label>
+          <label class="book-search">
+            <span aria-hidden="true">⌕</span>
+            <span class="visually-hidden">Search inventory by item name or code</span>
+            <input type="search" name="inventorySearch" [(ngModel)]="searchTerm"
+              placeholder="Search item name or code" />
+          </label>
+        </div>
         <label *ngIf="selectedCategory !== 'All items'" class="tax-exemption-toggle"
           [class.is-unsaved]="hasUnsavedCategorySetting('tax_exempt')">
           <input type="checkbox" [checked]="selectedCategoryTaxExempt" [disabled]="settingsSaving"
@@ -70,6 +113,37 @@
           {{ creatingCategory ? 'Adding category...' : 'Save category' }}
         </button>
       </form>
+      <details *ngIf="isManager" class="course-bundle-editor">
+        <summary>{{ editingCourseBundleId === null ? 'Create a bundle' : 'Edit bundle' }}</summary>
+        <form class="course-bundle-form" (ngSubmit)="saveCourseBundle()">
+          <label>
+            <span>Bundle name</span>
+            <input name="courseBundleName" type="text" maxlength="120" required
+              [(ngModel)]="courseBundleDraftName" [disabled]="courseBundleSaving"
+              placeholder="e.g. ARTS 1311 Kit" />
+          </label>
+          <fieldset [disabled]="courseBundleSaving">
+            <legend>Choose items (one of each)</legend>
+            <label *ngFor="let book of courseBundleEligibleBooks" class="course-bundle-choice">
+              <input type="checkbox" [checked]="isCourseBundleItemSelected(book.id)"
+                (change)="toggleCourseBundleItem(book.id, $event)" />
+              <span>{{ book.title }} <small>{{ book.quantity }} in stock</small></span>
+            </label>
+            <p *ngIf="!courseBundleEligibleBooks.length" class="empty-results">
+              Add non-apparel catalog items before creating a bundle.
+            </p>
+          </fieldset>
+          <div class="course-bundle-form-actions">
+            <button type="submit" class="manager-primary"
+              [disabled]="courseBundleSaving || !courseBundleDraftName.trim() || !courseBundleDraftItemIds.length">
+              {{ courseBundleSaving ? 'Saving...' : editingCourseBundleId === null ? 'Create bundle' : 'Save bundle' }}
+            </button>
+            <button *ngIf="editingCourseBundleId !== null" type="button" class="manager-secondary"
+              [disabled]="courseBundleSaving" (click)="cancelCourseBundleEdit()">Cancel</button>
+          </div>
+        </form>
+        <p *ngIf="courseBundleError" class="tax-exemption-error" role="alert">{{ courseBundleError }}</p>
+      </details>
       <details *ngIf="isManager" class="manager-discounts-section">
         <summary>Discount</summary>
         <div class="manager-category-list" aria-label="Manage category discounts">
@@ -126,6 +200,49 @@
         </div>
       </details>
       <p *ngIf="categoryError" class="tax-exemption-error" role="alert">{{ categoryError }}</p>
+
+      <section *ngIf="isManager || courseSupplyBundles.length" class="course-bundles"
+        aria-labelledby="course-bundles-title">
+        <div class="course-bundles-heading">
+          <div>
+            <p class="store-kicker"><span></span> Ready for class</p>
+            <h3 id="course-bundles-title">Course supply bundles</h3>
+          </div>
+          <p>Each bundle adds its in-stock items to the bag individually.</p>
+        </div>
+
+        <p *ngIf="courseBundleMessage" class="course-bundle-message" role="status">
+          {{ courseBundleMessage }}
+        </p>
+        <div *ngIf="courseSupplyBundles.length" class="course-bundle-list">
+          <article *ngFor="let bundle of courseSupplyBundles" class="course-bundle-card">
+            <div class="course-bundle-card-heading">
+              <h4>{{ bundle.name }}</h4>
+              <div *ngIf="isManager" class="course-bundle-manager-actions">
+                <button type="button" class="manager-secondary" [disabled]="courseBundleSaving"
+                  (click)="editCourseBundle(bundle)">Edit</button>
+                <button type="button" class="remove-category" [disabled]="courseBundleSaving"
+                  (click)="deleteCourseBundle(bundle)">Remove</button>
+              </div>
+            </div>
+            <ul>
+              <li *ngFor="let book of courseBundleBooks(bundle)">
+                <span>{{ book.title }}</span>
+                <strong [class.is-out-of-stock]="book.quantity < 1">
+                  <ng-container *ngIf="book.quantity > 0; else bundleItemOutOfStock">
+                    {{ book.price | currency:'USD' }}
+                  </ng-container>
+                  <ng-template #bundleItemOutOfStock>Out of stock</ng-template>
+                </strong>
+              </li>
+            </ul>
+            <button type="button" class="manager-primary" [disabled]="courseBundleAddingId !== null"
+              (click)="addCourseBundleToBag(bundle)">
+              {{ courseBundleAddingId === bundle.id ? 'Adding bundle...' : 'Add bundle to bag' }}
+            </button>
+          </article>
+        </div>
+      </section>
 
       <div class="catalog-controls" *ngIf="!isManager">
         <div class="category-browser">
@@ -388,7 +505,14 @@
             <span>{{ item.quantity }}</span>
             <button type="button" [disabled]="cancellingTransaction" [attr.aria-label]="'Add one ' + item.book.title + (isStudent ? ' to cart' : ' to bag')" (click)="changeQuantity(item, 1)">+</button>
           </div>
-          <button class="remove-from-bag" type="button" [disabled]="cancellingTransaction" (click)="removeFromBag(item)">Remove item</button>
+          <button class="remove-from-bag" type="button"
+            [disabled]="cancellingTransaction || staffCartItemRemovalLoading || staffItemPriceChangeLoading"
+            (click)="removeFromBag(item)">{{ isStudent ? 'Remove item (staff)' : 'Remove item' }}</button>
+          <button *ngIf="isStudent" class="change-item-price" type="button"
+            [disabled]="staffItemPriceChangeLoading || staffCartItemRemovalLoading"
+            (click)="beginStaffPriceChange(item)">
+            {{ staffItemPriceChangeLoading ? 'Updating price...' : 'Change price (staff)' }}
+          </button>
         </div>
         <div class="bag-line-total">
           <del *ngIf="getItemDiscountAmount(item) > 0">{{ item.book.price * item.quantity | currency:'USD' }}</del>
@@ -398,28 +522,37 @@
     </div>
     <div class="bag-checkout" *ngIf="bag.length">
       <div *ngIf="isStudent" class="student-id-entry">
-        <label for="student-id">Student ID <span class="optional-label">Optional</span></label>
-        <div *ngIf="appliedStudentId; else studentIdForm" class="student-id-applied" role="status">
-          <span class="student-id-pill">{{ appliedStudentId }}</span>
-          <span class="student-id-savings">{{ appliedStudentDiscountPercent }}% off</span>
-          <button type="button" class="student-id-remove" [disabled]="cartLoading"
-            [attr.aria-label]="'Remove student ID ' + appliedStudentId" (click)="removeStudentId()">Remove</button>
-        </div>
-        <ng-template #studentIdForm>
-          <div class="student-id-row">
-            <input id="student-id" name="studentId" type="text" autocomplete="off" maxlength="30"
-              [(ngModel)]="studentIdInput" (ngModelChange)="onStudentIdChange()" (keydown.enter)="applyStudentId()"
-              [attr.aria-invalid]="!!studentIdError" aria-describedby="student-id-message" />
-            <button type="button" [disabled]="!studentIdInput.trim() || cartLoading" (click)="applyStudentId()">Apply</button>
+        <details class="student-id-details">
+          <summary>
+            <span>Student ID <span class="optional-label">Optional</span></span>
+            <span *ngIf="appliedStudentId" class="student-id-summary-value">
+              {{ appliedStudentId }} · {{ appliedStudentDiscountPercent }}% off
+            </span>
+          </summary>
+          <div class="student-id-details-content">
+            <div *ngIf="appliedStudentId; else studentIdForm" class="student-id-applied" role="status">
+              <span class="student-id-pill">{{ appliedStudentId }}</span>
+              <span class="student-id-savings">{{ appliedStudentDiscountPercent }}% off</span>
+              <button type="button" class="student-id-remove" [disabled]="cartLoading"
+                [attr.aria-label]="'Remove student ID ' + appliedStudentId" (click)="removeStudentId()">Remove</button>
+            </div>
+            <ng-template #studentIdForm>
+              <div class="student-id-row">
+                <input id="student-id" name="studentId" type="text" autocomplete="off" maxlength="30"
+                  [(ngModel)]="studentIdInput" (ngModelChange)="onStudentIdChange()" (keydown.enter)="applyStudentId()"
+                  [attr.aria-invalid]="!!studentIdError" aria-describedby="student-id-message" />
+                <button type="button" [disabled]="!studentIdInput.trim() || cartLoading" (click)="applyStudentId()">Apply</button>
+              </div>
+            </ng-template>
+            <p *ngIf="studentIdError" id="student-id-message" class="payment-error" role="alert">{{ studentIdError }}</p>
+            <p *ngIf="!studentIdError && studentIdBlocksPayment && studentIdInput.trim()" id="student-id-message" class="payment-error" role="status">Select Apply to check this ID, or clear it to pay full price.</p>
+            <p *ngIf="studentDiscountNotApplicable && !studentIdBlocksPayment" class="student-discount-note" role="status">Discount does not apply to items in your cart</p>
           </div>
-        </ng-template>
-        <p *ngIf="studentIdError" id="student-id-message" class="payment-error" role="alert">{{ studentIdError }}</p>
-        <p *ngIf="!studentIdError && studentIdBlocksPayment && studentIdInput.trim()" id="student-id-message" class="payment-error" role="status">Select Apply to check this ID, or clear it to pay full price.</p>
-        <p *ngIf="studentDiscountNotApplicable && !studentIdBlocksPayment" class="student-discount-note" role="status">Discount does not apply to items in your cart</p>
+        </details>
       </div>
       <label *ngIf="isManager" class="tax-exemption-toggle employee-discount-toggle">
         <input type="checkbox" name="useEmployeeDiscount" [(ngModel)]="useEmployeeDiscount" (ngModelChange)="onEmployeeDiscountChange()" />
-        <span>Use Employee Discount?</span>
+        <span>Use Employee Discount? (staff PIN required)</span>
       </label>
       <div><span>Subtotal before discounts</span><strong>{{ bagOriginalSubtotal | currency:'USD' }}</strong></div>
       <div *ngIf="bagDiscountTotal > 0"><span>Category discounts</span><strong>−{{ bagDiscountTotal | currency:'USD' }}</strong></div>
@@ -442,6 +575,15 @@
         </div>
         <p *ngIf="cashReceived !== null && cashReceived < bagTotal" class="payment-error" role="alert">Amount received must cover the total.</p>
         <p *ngIf="cashReceived !== null && cashReceived >= bagTotal" class="change-due">Change due <strong>{{ changeDue | currency:'USD' }}</strong></p>
+        <p *ngIf="showStudentLowChangeWarning" class="cash-drawer-warning cash-change-warning"
+          role="alert" aria-live="assertive">
+          <strong>Low change warning.</strong>
+          <span>This cash payment and change due would leave
+            {{ projectedCashDrawerBalance | currency:'USD' }} in the drawer, below the manager-set threshold of
+            {{ cashDrawer?.low_change_threshold | currency:'USD' }}.</span>
+        </p>
+        <p *ngIf="isStudent && appliedStudentId && staffAuthorization && cashDrawerError"
+          class="payment-error" role="alert">{{ cashDrawerError }}</p>
       </div>
       <button *ngIf="canCheckout && paymentMethod === 'cash'" class="complete-payment" type="button" [disabled]="!canCompleteSale || processingPayment || cancellingTransaction" (click)="completeSale()">
         {{ processingPayment ? 'Processing payment...' : 'Complete cash payment' }} <span>{{ bagTotal | currency:'USD' }}</span>
@@ -451,6 +593,51 @@
       <p *ngIf="checkoutMessage && !showCardDialog" role="status">{{ checkoutMessage }}</p>
     </div>
   </aside>
+
+  <button *ngIf="showStaffPinDialog" class="card-dialog-scrim staff-pin-scrim"
+    type="button" aria-label="Close staff verification" (click)="cancelStaffVerification()"></button>
+  <section *ngIf="showStaffPinDialog" class="card-dialog staff-pin-dialog"
+    role="dialog" aria-modal="true" aria-labelledby="staff-pin-title">
+    <header class="receipt-header">
+      <div>
+        <p class="store-kicker">Staff verification</p>
+        <h2 id="staff-pin-title">Enter staff ID and PIN</h2>
+      </div>
+      <button type="button" class="close-bag" aria-label="Close staff verification"
+        [disabled]="staffPinSubmitting" (click)="cancelStaffVerification()">×</button>
+    </header>
+    <p class="form-intro">
+      {{ isStaffPriceChangeVerificationPending
+        ? 'Enter the new catalog price and reason. A Manager or Operator must verify with their staff ID and PIN.'
+        : isStaffRemovalVerificationPending
+          ? 'A staff member must verify before removing an item from this student transaction.'
+          : 'A staff member must verify before this discount override can be applied.' }}
+    </p>
+    <form class="staff-pin-form" (ngSubmit)="submitStaffPin()">
+      <ng-container *ngIf="isStaffPriceChangeVerificationPending">
+        <label for="staff-item-new-price">New catalog price</label>
+        <input id="staff-item-new-price" name="staffItemPrice" type="number" min="0" max="999.99"
+          step="0.01" required [(ngModel)]="staffItemPriceDraft" />
+        <label for="staff-item-price-reason">Reason for price change</label>
+        <textarea id="staff-item-price-reason" name="staffItemPriceReason" rows="3" maxlength="500"
+          required [(ngModel)]="staffItemPriceReason"></textarea>
+      </ng-container>
+      <label for="staff-id">Staff ID</label>
+      <input id="staff-id" name="staffId" type="text" inputmode="numeric" autocomplete="off"
+        pattern="[1-9][0-9]*" required [(ngModel)]="staffIdInput" />
+      <label for="staff-pin">PIN</label>
+      <input id="staff-pin" name="staffPin" type="password" inputmode="numeric" autocomplete="off"
+        minlength="4" maxlength="12" pattern="[0-9]{4,12}" required [(ngModel)]="staffPinInput" />
+      <p *ngIf="staffPinError" class="payment-error" role="alert">{{ staffPinError }}</p>
+      <div class="card-dialog-actions">
+        <button type="button" class="editor-cancel" [disabled]="staffPinSubmitting"
+          (click)="cancelStaffVerification()">Cancel</button>
+        <button type="submit" class="complete-payment" [disabled]="staffPinSubmitting">
+          {{ staffPinSubmitting ? 'Verifying...' : 'Verify staff' }}
+        </button>
+      </div>
+    </form>
+  </section>
 
   <button *ngIf="showCardDialog" class="card-dialog-scrim" type="button" aria-label="Close card payment" (click)="closeCardDialog()"></button>
   <section *ngIf="showCardDialog" class="card-dialog" role="dialog" aria-modal="true" aria-labelledby="card-dialog-title">
@@ -647,6 +834,131 @@
       </div>
     </div>
     <p *ngIf="variantError" class="payment-error" role="alert">{{ variantError }}</p>
+  </section>
+
+  <button *ngIf="showDailySalesReport" class="manager-scrim" type="button"
+    aria-label="Close daily sales report" (click)="closeDailySalesReport()"></button>
+  <section *ngIf="showDailySalesReport" class="manager-dialog sales-history-dialog" role="dialog"
+    aria-modal="true" aria-labelledby="daily-sales-report-title">
+    <header class="manager-dialog-heading">
+      <div>
+        <p class="store-kicker">Completed transactions</p>
+        <h2 id="daily-sales-report-title">Daily sales report</h2>
+      </div>
+      <button type="button" class="close-bag" aria-label="Close daily sales report"
+        (click)="closeDailySalesReport()">×</button>
+    </header>
+    <form class="daily-report-date-form" (ngSubmit)="loadDailySalesReport()">
+      <label for="daily-sales-report-date">Report date</label>
+      <input id="daily-sales-report-date" name="dailySalesReportDate" type="date"
+        [(ngModel)]="dailySalesReportDate" required [disabled]="dailySalesReportLoading" />
+      <button class="manager-secondary" type="submit"
+        [disabled]="dailySalesReportLoading || !dailySalesReportDate">
+        {{ dailySalesReportLoading ? 'Loading...' : 'View report' }}
+      </button>
+    </form>
+    <p *ngIf="dailySalesReportLoading" class="empty-results" role="status">Loading sales for selected date...</p>
+    <p *ngIf="dailySalesReportError" class="empty-results" role="alert">{{ dailySalesReportError }}</p>
+    <ng-container *ngIf="!dailySalesReportLoading && !dailySalesReportError && dailySalesReport">
+      <article class="sales-history-record daily-report-summary">
+        <header class="sales-record-heading">
+          <div>
+            <strong>Total money taken in</strong>
+            <span>{{ dailySalesReport.date | date:'fullDate' }} · {{ dailySalesReport.sales_count }} sales</span>
+          </div>
+          <strong class="sales-record-total">{{ dailySalesReport.total_money_taken_in | currency:'USD' }}</strong>
+        </header>
+      </article>
+      <article *ngFor="let sale of dailySalesReceipts" class="sales-history-record">
+        <header class="sales-record-heading">
+          <div>
+            <strong>Receipt {{ sale.number }}</strong>
+            <span>{{ sale.issuedAt }}</span>
+          </div>
+          <strong class="sales-record-total">{{ sale.total | currency:'USD' }}</strong>
+        </header>
+        <table class="receipt-table sales-history-table">
+          <thead><tr><th>Item</th><th>Qty</th><th>Each</th><th>Discount</th><th>Subtotal</th><th>Tax</th><th>Total</th></tr></thead>
+          <tbody>
+            <tr *ngFor="let item of sale.items">
+              <td>{{ item.title }}<small>{{ item.itemCode }}</small></td>
+              <td>{{ item.quantity }}</td>
+              <td>{{ item.unitPrice | currency:'USD' }}</td>
+              <td>
+                {{ item.discountAmount | currency:'USD' }}
+                <small *ngIf="item.discountType === 'percent'">{{ item.discountValue }}% off</small>
+                <small *ngIf="item.discountType === 'dollar'">{{ item.discountValue | currency:'USD' }} off</small>
+              </td>
+              <td>{{ item.lineTotal | currency:'USD' }}</td>
+              <td>{{ item.taxAmount | currency:'USD' }}</td>
+              <td>{{ item.totalWithTax | currency:'USD' }}</td>
+            </tr>
+          </tbody>
+        </table>
+      </article>
+      <article class="sales-history-record">
+        <header class="sales-record-heading">
+          <div><strong>Sales by category</strong></div>
+        </header>
+        <p *ngIf="!dailySalesReport.category_breakdown.length" class="empty-results">No completed sales today.</p>
+        <table *ngIf="dailySalesReport.category_breakdown.length" class="receipt-table sales-history-table">
+          <thead><tr><th>Category</th><th>Total</th></tr></thead>
+          <tbody>
+            <tr *ngFor="let category of dailySalesReport.category_breakdown">
+              <td>{{ category.category }}</td>
+              <td>{{ category.total | currency:'USD' }}</td>
+            </tr>
+          </tbody>
+        </table>
+      </article>
+    </ng-container>
+  </section>
+
+  <button *ngIf="showBestSellingItemsReport" class="manager-scrim" type="button"
+    aria-label="Close best-selling items report" (click)="closeBestSellingItemsReport()"></button>
+  <section *ngIf="showBestSellingItemsReport" class="manager-dialog sales-history-dialog" role="dialog"
+    aria-modal="true" aria-labelledby="best-selling-items-title">
+    <header class="manager-dialog-heading">
+      <div>
+        <p class="store-kicker">Inventory insights</p>
+        <h2 id="best-selling-items-title">Best-selling items</h2>
+      </div>
+      <button type="button" class="close-bag" aria-label="Close best-selling items report"
+        (click)="closeBestSellingItemsReport()">×</button>
+    </header>
+    <form class="daily-report-date-form" (ngSubmit)="loadBestSellingItemsReport()">
+      <label for="best-selling-start-date">Start date
+        <input id="best-selling-start-date" name="bestSellingStartDate" type="date"
+          [(ngModel)]="bestSellingStartDate" required [disabled]="bestSellingItemsReportLoading" />
+      </label>
+      <label for="best-selling-end-date">End date
+        <input id="best-selling-end-date" name="bestSellingEndDate" type="date"
+          [(ngModel)]="bestSellingEndDate" required [disabled]="bestSellingItemsReportLoading" />
+      </label>
+      <button class="manager-secondary" type="submit"
+        [disabled]="bestSellingItemsReportLoading || !bestSellingStartDate || !bestSellingEndDate">
+        {{ bestSellingItemsReportLoading ? 'Loading...' : 'View report' }}
+      </button>
+    </form>
+    <p *ngIf="bestSellingItemsReportLoading" class="empty-results" role="status">Loading best-selling items...</p>
+    <p *ngIf="bestSellingItemsReportError" class="empty-results" role="alert">{{ bestSellingItemsReportError }}</p>
+    <ng-container *ngIf="!bestSellingItemsReportLoading && !bestSellingItemsReportError && bestSellingItemsReport">
+      <p class="best-selling-date-range">
+        {{ bestSellingItemsReport.start_date | date:'mediumDate' }} –
+        {{ bestSellingItemsReport.end_date | date:'mediumDate' }}
+      </p>
+      <p *ngIf="!bestSellingItemsReport.items.length" class="empty-results">No completed sales in this date range.</p>
+      <table *ngIf="bestSellingItemsReport.items.length" class="receipt-table sales-history-table">
+        <thead><tr><th>Rank</th><th>Item</th><th>Qty sold</th></tr></thead>
+        <tbody>
+          <tr *ngFor="let item of bestSellingItemsReport.items; let rank = index">
+            <td>{{ rank + 1 }}</td>
+            <td>{{ item.item_name }}<small>{{ item.item_code }}</small></td>
+            <td>{{ item.quantity_sold }}</td>
+          </tr>
+        </tbody>
+      </table>
+    </ng-container>
   </section>
 
   <button *ngIf="showSalesHistory" class="manager-scrim" type="button" aria-label="Close sales history" (click)="closeSalesHistory()"></button>

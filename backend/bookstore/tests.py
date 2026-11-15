@@ -2,13 +2,15 @@ from decimal import Decimal
 
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import Group
+from django.core.cache import cache
 from rest_framework.test import APITestCase
 
-from .models import Cart, CartItem, Category, Item, Sale, SaleItem, StudentId
+from .models import Cart, CartItem, Category, Item, Sale, SaleItem, StaffCredential, StudentId
 
 
 class CheckoutApiTests(APITestCase):
 	def setUp(self):
+		cache.clear()
 		self.user = get_user_model().objects.create_user(
 			username="checkout-student",
 			password="test-password",
@@ -405,11 +407,26 @@ class CheckoutApiTests(APITestCase):
 
 class DiscountApiTests(APITestCase):
 	def setUp(self):
+		cache.clear()
 		self.user = get_user_model().objects.create_user(
 			username="discount-user",
 			password="test-password",
 		)
 		self.client.force_authenticate(user=self.user)
+		manager_group, _ = Group.objects.get_or_create(name="Manager")
+		self.staff_user = get_user_model().objects.create_user(
+			username="discount-staff",
+			password="staff-password",
+		)
+		self.staff_user.groups.add(manager_group)
+		staff_credential = StaffCredential(user=self.staff_user)
+		staff_credential.set_pin("8462")
+		staff_credential.save()
+		self.staff_authorization = self.client.post(
+			"/api/auth/staff/verify-pin/",
+			{"staff_id": self.staff_user.pk, "pin": "8462"},
+			format="json",
+		).data["staff_authorization"]
 		self.category = Category.objects.create(category_name="Fiction")
 		self.item = Item.objects.create(
 			item="Test Book",
@@ -430,10 +447,35 @@ class DiscountApiTests(APITestCase):
 		self.user.groups.add(group)
 
 	def checkout(self, **discount_fields):
+		needs_staff = (
+			bool(str(discount_fields.get("student_id") or "").strip())
+			or str(discount_fields.get("use_employee_discount", "")).lower() == "true"
+			or self.user.groups.filter(name="Operator").exists()
+		)
 		return self.client.post(
 			self.checkout_url,
 			{"payment_method": "card", **discount_fields},
 			format="json",
+			**(
+				{"HTTP_X_STAFF_AUTHORIZATION": self.staff_authorization}
+				if needs_staff
+				else {}
+			),
+		)
+
+	def cart(self, params=None):
+		needs_staff = (
+			bool(str((params or {}).get("student_id") or "").strip())
+			or str((params or {}).get("use_employee_discount", "")).lower() == "true"
+		)
+		return self.client.get(
+			self.cart_url,
+			params or {},
+			**(
+				{"HTTP_X_STAFF_AUTHORIZATION": self.staff_authorization}
+				if needs_staff
+				else {}
+			),
 		)
 
 	def assert_no_sale_and_cart_intact(self):
@@ -453,6 +495,33 @@ class DiscountApiTests(APITestCase):
 		self.assertEqual(response.data["tax_amount"], "1.86")
 		self.assertEqual(response.data["total"], "24.36")
 
+	def test_student_discount_preview_requires_staff_pin(self):
+		response = self.client.get(self.cart_url, {"student_id": "S1001"})
+
+		self.assertEqual(response.status_code, 403)
+		self.assertIn("Staff ID and PIN", response.data["detail"])
+
+	def test_manager_employee_discount_requires_staff_pin(self):
+		self.join_group("Manager")
+		response = self.client.get(
+			self.cart_url,
+			{"use_employee_discount": "true"},
+		)
+
+		self.assertEqual(response.status_code, 403)
+		self.assertIn("Staff ID and PIN", response.data["detail"])
+
+	def test_operator_checkout_requires_staff_pin(self):
+		self.join_group("Operator")
+		response = self.client.post(
+			self.checkout_url,
+			{"payment_method": "card"},
+			format="json",
+		)
+
+		self.assertEqual(response.status_code, 403)
+		self.assertFalse(Sale.objects.exists())
+
 	def test_invalid_or_inactive_student_id_is_rejected_without_changes(self):
 		for student_id in ("NOPE", "S2002"):
 			with self.subTest(student_id=student_id):
@@ -462,7 +531,7 @@ class DiscountApiTests(APITestCase):
 				self.assertEqual(response.data["error"], "Enter a valid student ID.")
 				self.assert_no_sale_and_cart_intact()
 
-				cart_response = self.client.get(self.cart_url, {"student_id": student_id})
+				cart_response = self.cart({"student_id": student_id})
 				self.assertEqual(cart_response.status_code, 400)
 
 	def test_student_with_blank_id_pays_full_price(self):
@@ -489,7 +558,7 @@ class DiscountApiTests(APITestCase):
 		)
 		for fields, discount_type, discount, total in cases:
 			with self.subTest(fields=fields):
-				response = self.client.get(self.cart_url, fields)
+				response = self.cart(fields)
 
 				self.assertEqual(response.data["customer_discount_type"], discount_type)
 				self.assertEqual(response.data["customer_discount_amount"], discount)
@@ -614,7 +683,7 @@ class DiscountApiTests(APITestCase):
 		self.item.student_discount_exempt = True
 		self.item.save(update_fields=["student_discount_exempt"])
 
-		response = self.client.get(self.cart_url, {"student_id": "S1001"})
+		response = self.cart({"student_id": "S1001"})
 
 		self.assertEqual(response.status_code, 200)
 		self.assertEqual(response.data["customer_discount_type"], "student")
@@ -800,7 +869,7 @@ class DiscountApiTests(APITestCase):
 		self.category.discount_value = Decimal("15.00")
 		self.category.save(update_fields=["discount_type", "discount_value"])
 		params = {"student_id": "S1001"}
-		cart_total = self.client.get(self.cart_url, params).data["total_price"]
+		cart_total = self.cart(params).data["total_price"]
 
 		response = self.checkout(**params)
 

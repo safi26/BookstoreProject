@@ -3,14 +3,20 @@ import { HttpErrorResponse } from '@angular/common/http';
 import { Component, inject } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { Router, RouterLink } from '@angular/router';
-import { catchError, concat, forkJoin, map, of, toArray } from 'rxjs';
+import { catchError, concat, concatMap, forkJoin, from, map, of, toArray } from 'rxjs';
 import { AuthService } from './auth.service';
 import {
   ApiCartItem,
+  ApiCashDrawer,
+  ApiBestSellingItemsReport,
   ApiCategory,
+  ApiCourseSupplyBundle,
+  ApiDailySalesReport,
   ApiItem,
   ApiItemVariant,
   ApiSaleReceipt,
+  ApiStaffCartItemPriceChange,
+  ApiStaffCartItemRemoval,
   CheckoutPayload,
   CustomerDiscountRequest,
   CustomerDiscountType,
@@ -127,6 +133,7 @@ export class BookstoreDashboardComponent {
   readonly canCheckout = this.isStudent || this.isOperator || this.isManager;
   categories: string[] = ['All items'];
   categoryRecords: ApiCategory[] = [];
+  courseSupplyBundles: ApiCourseSupplyBundle[] = [];
   books: Book[] = [];
   loading = true;
   apiError = '';
@@ -142,6 +149,20 @@ export class BookstoreDashboardComponent {
   categoryError = '';
   creatingCategory = false;
   deletingCategory = false;
+  courseBundleDraftName = '';
+  courseBundleDraftItemIds: number[] = [];
+  editingCourseBundleId: number | null = null;
+  courseBundleSaving = false;
+  courseBundleAddingId: number | null = null;
+  courseBundleMessage = '';
+  courseBundleError = '';
+  cashDrawer: ApiCashDrawer | null = null;
+  cashDrawerBalanceDraft: number | null = null;
+  cashDrawerThresholdDraft: number | null = null;
+  cashDrawerLoading = false;
+  cashDrawerSaving = false;
+  cashDrawerError = '';
+  cashDrawerMessage = '';
   showBookEditor = false;
   editingBookId: number | null = null;
   bookDraft: BookDraft = this.createBookDraft();
@@ -154,7 +175,19 @@ export class BookstoreDashboardComponent {
   studentIdError = '';
   studentDiscountNotApplicable = false;
   appliedStudentDiscountPercent = 0;
-  useEmployeeDiscount = true;
+  useEmployeeDiscount = false;
+  staffAuthorization: string | null = null;
+  showStaffPinDialog = false;
+  staffIdInput = '';
+  staffPinInput = '';
+  staffPinError = '';
+  staffPinSubmitting = false;
+  private pendingStaffAction: 'student-id' | 'employee-discount' | 'checkout' | 'remove-cart-item' | 'change-item-price' | null = null;
+  private pendingCartItemId: number | null = null;
+  staffCartItemRemovalLoading = false;
+  staffItemPriceChangeLoading = false;
+  staffItemPriceDraft: number | null = null;
+  staffItemPriceReason = '';
   selectedVariantIds: Record<number, number | null> = {};
   showVariantManager = false;
   managedVariantBook: Book | null = null;
@@ -170,6 +203,18 @@ export class BookstoreDashboardComponent {
   salesHistoryError = '';
   salesSearch = '';
   salesHistory: SaleReceipt[] = [];
+  showDailySalesReport = false;
+  dailySalesReportLoading = false;
+  dailySalesReportError = '';
+  dailySalesReport: ApiDailySalesReport | null = null;
+  dailySalesReceipts: SaleReceipt[] = [];
+  dailySalesReportDate = this.localDateInputValue(new Date());
+  showBestSellingItemsReport = false;
+  bestSellingItemsReportLoading = false;
+  bestSellingItemsReportError = '';
+  bestSellingItemsReport: ApiBestSellingItemsReport | null = null;
+  bestSellingStartDate = this.localDateInputValue(new Date());
+  bestSellingEndDate = this.localDateInputValue(new Date());
   paymentMethod: 'cash' | 'card' = 'cash';
   cashReceived: number | null = null;
   showCardDialog = false;
@@ -268,6 +313,67 @@ export class BookstoreDashboardComponent {
 
   constructor() {
     this.loadCatalog();
+    if (this.isManager || this.isOperator) {
+      this.loadCashDrawer();
+    }
+  }
+
+  saveCashDrawerSettings(): void {
+    const balance = Number(this.cashDrawerBalanceDraft);
+    const threshold = Number(this.cashDrawerThresholdDraft);
+    if (
+      !this.isManager ||
+      this.cashDrawerSaving ||
+      this.cashDrawerBalanceDraft === null ||
+      this.cashDrawerThresholdDraft === null ||
+      !Number.isFinite(balance) ||
+      !Number.isFinite(threshold) ||
+      balance < 0 ||
+      threshold < 0 ||
+      balance > 99999999.99 ||
+      threshold > 99999999.99 ||
+      Math.abs(balance * 100 - Math.round(balance * 100)) >= 0.00000001 ||
+      Math.abs(threshold * 100 - Math.round(threshold * 100)) >= 0.00000001
+    ) {
+      this.cashDrawerError = 'Enter non-negative amounts with at most two decimal places.';
+      return;
+    }
+
+    this.cashDrawerSaving = true;
+    this.cashDrawerError = '';
+    this.cashDrawerMessage = '';
+    this.storeApi.updateCashDrawer(balance, threshold).subscribe({
+      next: drawer => {
+        this.applyCashDrawer(drawer);
+        this.cashDrawerSaving = false;
+        this.cashDrawerMessage = 'Cash drawer settings saved.';
+      },
+      error: error => {
+        this.cashDrawerSaving = false;
+        this.cashDrawerError = this.getApiError(error, 'Could not save cash drawer settings.');
+      }
+    });
+  }
+
+  private loadCashDrawer(staffAuthorization: string | null = null): void {
+    this.cashDrawerLoading = true;
+    this.cashDrawerError = '';
+    this.storeApi.getCashDrawer(staffAuthorization).subscribe({
+      next: drawer => {
+        this.applyCashDrawer(drawer);
+        this.cashDrawerLoading = false;
+      },
+      error: error => {
+        this.cashDrawerLoading = false;
+        this.cashDrawerError = this.getApiError(error, 'Could not load cash drawer status.');
+      }
+    });
+  }
+
+  private applyCashDrawer(drawer: ApiCashDrawer): void {
+    this.cashDrawer = drawer;
+    this.cashDrawerBalanceDraft = Number(drawer.balance);
+    this.cashDrawerThresholdDraft = Number(drawer.low_change_threshold);
   }
 
   get filteredBooks(): Book[] {
@@ -299,6 +405,10 @@ export class BookstoreDashboardComponent {
       this.selectedCategory === 'All items' || book.category === this.selectedCategory
     );
     return categoryItems.slice(0, 4);
+  }
+
+  get courseBundleEligibleBooks(): Book[] {
+    return this.books.filter(book => !this.isApparel(book));
   }
 
   get unsavedSettingsCount(): number {
@@ -503,6 +613,24 @@ export class BookstoreDashboardComponent {
     return Math.max(0, Number(this.cashReceived ?? 0) - this.bagTotal);
   }
 
+  get projectedCashDrawerBalance(): number {
+    if (!this.cashDrawer || this.cashReceived === null) {
+      return 0;
+    }
+    return Math.max(0, Number(this.cashDrawer.balance) + Number(this.cashReceived) - this.changeDue);
+  }
+
+  get showStudentLowChangeWarning(): boolean {
+    return this.isStudent &&
+      Boolean(this.appliedStudentId) &&
+      Boolean(this.staffAuthorization) &&
+      this.paymentMethod === 'cash' &&
+      this.cashReceived !== null &&
+      this.cashReceived >= this.bagTotal &&
+      this.cashDrawer !== null &&
+      this.projectedCashDrawerBalance < Number(this.cashDrawer.low_change_threshold);
+  }
+
   get cardExpiryIsValid(): boolean {
     if (!this.cardExpiryMonth || !this.cardExpiryYear) {
       return false;
@@ -640,6 +768,10 @@ export class BookstoreDashboardComponent {
   applyStudentId(): void {
     if (this.isStudent) {
       this.studentIdError = '';
+      if (!this.staffAuthorization) {
+        this.requestStaffVerification('student-id');
+        return;
+      }
       this.loadCart(this.studentIdInput.trim());
     }
   }
@@ -655,7 +787,114 @@ export class BookstoreDashboardComponent {
   }
 
   onEmployeeDiscountChange(): void {
+    if (this.useEmployeeDiscount && !this.staffAuthorization) {
+      this.useEmployeeDiscount = false;
+      this.requestStaffVerification('employee-discount');
+      return;
+    }
     this.loadCart();
+  }
+
+  requestStaffVerification(
+    action: 'student-id' | 'employee-discount' | 'checkout' | 'remove-cart-item' | 'change-item-price',
+    cartItemId: number | null = null
+  ): void {
+    this.pendingStaffAction = action;
+    this.pendingCartItemId = action === 'remove-cart-item' || action === 'change-item-price'
+      ? cartItemId
+      : null;
+    this.staffIdInput = '';
+    this.staffPinInput = '';
+    this.staffPinError = '';
+    this.showStaffPinDialog = true;
+  }
+
+  get isStaffRemovalVerificationPending(): boolean {
+    return this.pendingStaffAction === 'remove-cart-item';
+  }
+
+  get isStaffPriceChangeVerificationPending(): boolean {
+    return this.pendingStaffAction === 'change-item-price';
+  }
+
+  beginStaffPriceChange(item: BagItem): void {
+    this.staffItemPriceDraft = item.book.price;
+    this.staffItemPriceReason = '';
+    this.requestStaffVerification('change-item-price', item.cartItemId);
+  }
+
+  cancelStaffVerification(): void {
+    if (this.staffPinSubmitting) {
+      return;
+    }
+    this.showStaffPinDialog = false;
+    this.pendingStaffAction = null;
+    this.pendingCartItemId = null;
+    this.staffPinInput = '';
+  }
+
+  submitStaffPin(): void {
+    const staffId = this.staffIdInput.trim();
+    const pin = this.staffPinInput;
+    if (this.isStaffPriceChangeVerificationPending) {
+      const newPrice = Number(this.staffItemPriceDraft);
+      if (this.staffItemPriceDraft === null ||
+          !Number.isFinite(newPrice) ||
+          newPrice < 0 ||
+          newPrice > 999.99 ||
+          Math.round(newPrice * 100) !== newPrice * 100 ||
+          !this.staffItemPriceReason.trim()) {
+        this.staffPinError = 'Enter a valid new price and a reason for the change.';
+        return;
+      }
+    }
+    if (!/^[1-9]\d*$/.test(staffId) ||
+        !Number.isSafeInteger(Number(staffId)) ||
+        !/^\d{4,12}$/.test(pin)) {
+      this.staffPinError = 'Enter a valid staff ID and a PIN of 4 to 12 digits.';
+      return;
+    }
+
+    this.staffPinSubmitting = true;
+    this.staffPinError = '';
+    this.storeApi.verifyStaffPin(Number(staffId), pin).subscribe({
+      next: response => {
+        const action = this.pendingStaffAction;
+        const cartItemId = this.pendingCartItemId;
+        const newPrice = this.staffItemPriceDraft;
+        const reason = this.staffItemPriceReason.trim();
+        this.staffAuthorization = response.staff_authorization;
+        this.staffPinSubmitting = false;
+        this.showStaffPinDialog = false;
+        this.pendingStaffAction = null;
+        this.pendingCartItemId = null;
+        this.staffPinInput = '';
+
+        if (action === 'student-id') {
+          this.loadCashDrawer(response.staff_authorization);
+          this.loadCart(this.studentIdInput.trim());
+        } else if (action === 'employee-discount') {
+          this.useEmployeeDiscount = true;
+          this.loadCart();
+        } else if (action === 'checkout') {
+          this.completeSale();
+        } else if (action === 'remove-cart-item' && cartItemId !== null) {
+          this.removeStudentCartItem(cartItemId, response.staff_authorization);
+        } else if (action === 'change-item-price' && cartItemId !== null && newPrice !== null) {
+          this.changeStudentCartItemPrice(
+            cartItemId,
+            newPrice,
+            reason,
+            response.staff_authorization
+          );
+        }
+      },
+      error: error => {
+        this.staffPinSubmitting = false;
+        this.staffPinInput = '';
+        this.staffPinError = this.getApiError(error, 'Invalid staff ID or PIN.');
+      }
+    });
   }
 
   private resetDiscountSelection(): void {
@@ -663,7 +902,8 @@ export class BookstoreDashboardComponent {
     this.appliedStudentId = '';
     this.studentIdError = '';
     this.studentDiscountNotApplicable = false;
-    this.useEmployeeDiscount = true;
+    this.useEmployeeDiscount = false;
+    this.staffAuthorization = null;
   }
 
   closeCardDialog(): void {
@@ -787,6 +1027,171 @@ export class BookstoreDashboardComponent {
     });
   }
 
+  courseBundleBooks(bundle: ApiCourseSupplyBundle): Book[] {
+    return bundle.items
+      .map(itemId => this.books.find(book => book.id === itemId))
+      .filter((book): book is Book => book !== undefined);
+  }
+
+  isCourseBundleItemSelected(itemId: number): boolean {
+    return this.courseBundleDraftItemIds.includes(itemId);
+  }
+
+  toggleCourseBundleItem(itemId: number, event: Event): void {
+    const target = event.target;
+    if (!this.isManager || this.courseBundleSaving || !(target instanceof HTMLInputElement)) {
+      return;
+    }
+
+    this.courseBundleDraftItemIds = target.checked
+      ? [...new Set([...this.courseBundleDraftItemIds, itemId])]
+      : this.courseBundleDraftItemIds.filter(id => id !== itemId);
+    this.courseBundleError = '';
+  }
+
+  editCourseBundle(bundle: ApiCourseSupplyBundle): void {
+    if (!this.isManager || this.courseBundleSaving) {
+      return;
+    }
+
+    this.editingCourseBundleId = bundle.id;
+    this.courseBundleDraftName = bundle.name;
+    this.courseBundleDraftItemIds = [...bundle.items];
+    this.courseBundleError = '';
+    this.courseBundleMessage = '';
+  }
+
+  cancelCourseBundleEdit(): void {
+    if (this.courseBundleSaving) {
+      return;
+    }
+
+    this.editingCourseBundleId = null;
+    this.courseBundleDraftName = '';
+    this.courseBundleDraftItemIds = [];
+    this.courseBundleError = '';
+  }
+
+  saveCourseBundle(): void {
+    if (!this.isManager || this.courseBundleSaving) {
+      return;
+    }
+
+    const name = this.courseBundleDraftName.trim();
+    const itemIds = [...new Set(this.courseBundleDraftItemIds)];
+    if (!name) {
+      this.courseBundleError = 'Enter a name for this bundle.';
+      return;
+    }
+    if (itemIds.length === 0) {
+      this.courseBundleError = 'Select at least one catalog item.';
+      return;
+    }
+
+    this.courseBundleSaving = true;
+    this.courseBundleError = '';
+    this.courseBundleMessage = '';
+    const request = this.editingCourseBundleId === null
+      ? this.storeApi.createCourseSupplyBundle(name, itemIds)
+      : this.storeApi.updateCourseSupplyBundle(this.editingCourseBundleId, name, itemIds);
+    request.subscribe({
+      next: bundle => {
+        this.courseSupplyBundles = [
+          ...this.courseSupplyBundles.filter(existing => existing.id !== bundle.id),
+          bundle
+        ].sort((a, b) => a.name.localeCompare(b.name));
+        this.courseBundleSaving = false;
+        this.cancelCourseBundleEdit();
+        this.courseBundleMessage = `Bundle "${bundle.name}" saved.`;
+      },
+      error: error => {
+        this.courseBundleError = this.getApiError(error, 'Could not save this course supply bundle.');
+        this.courseBundleSaving = false;
+      }
+    });
+  }
+
+  deleteCourseBundle(bundle: ApiCourseSupplyBundle): void {
+    if (!this.isManager || this.courseBundleSaving) {
+      return;
+    }
+    if (!window.confirm(`Delete the "${bundle.name}" bundle?`)) {
+      return;
+    }
+
+    this.courseBundleSaving = true;
+    this.courseBundleError = '';
+    this.courseBundleMessage = '';
+    this.storeApi.deleteCourseSupplyBundle(bundle.id).subscribe({
+      next: () => {
+        this.courseSupplyBundles = this.courseSupplyBundles.filter(
+          existing => existing.id !== bundle.id
+        );
+        this.courseBundleSaving = false;
+        if (this.editingCourseBundleId === bundle.id) {
+          this.cancelCourseBundleEdit();
+        }
+        this.courseBundleMessage = `Bundle "${bundle.name}" deleted.`;
+      },
+      error: error => {
+        this.courseBundleError = this.getApiError(error, 'Could not delete this bundle.');
+        this.courseBundleSaving = false;
+      }
+    });
+  }
+
+  addCourseBundleToBag(bundle: ApiCourseSupplyBundle): void {
+    if (this.courseBundleAddingId !== null) {
+      return;
+    }
+    const userId = this.authService.currentUserId;
+    if (userId === null) {
+      this.bagMessage = 'Sign in to add a course supply bundle to your bag.';
+      return;
+    }
+
+    const books = this.courseBundleBooks(bundle);
+    const missingIds = bundle.items.filter(
+      itemId => !books.some(book => book.id === itemId)
+    );
+    this.courseBundleAddingId = bundle.id;
+    this.courseBundleMessage = '';
+    from(books).pipe(
+      concatMap(book => {
+        if (book.quantity < 1) {
+          return of({ book, added: false, reason: 'Out of stock.' });
+        }
+        return this.storeApi.addCartItem(userId, book.id).pipe(
+          map(() => ({ book, added: true, reason: '' })),
+          catchError(error => of({
+            book,
+            added: false,
+            reason: this.getApiError(error, 'Could not add this item.')
+          }))
+        );
+      }),
+      toArray()
+    ).subscribe(results => {
+      this.courseBundleAddingId = null;
+      this.loadCart();
+      this.showBag = true;
+      const addedCount = results.filter(result => result.added).length;
+      const unavailable = results
+        .filter(result => !result.added)
+        .map(result => `${result.book.title}: ${result.reason}`);
+      if (missingIds.length) {
+        unavailable.push(`${missingIds.length} catalog ${missingIds.length === 1 ? 'item is' : 'items are'} no longer available.`);
+      }
+      const addedMessage = addedCount
+        ? `Added ${addedCount} ${addedCount === 1 ? 'item' : 'items'} from "${bundle.name}".`
+        : `No items from "${bundle.name}" were added.`;
+      this.courseBundleMessage = unavailable.length
+        ? `${addedMessage} Not added: ${unavailable.join(' ')}`
+        : addedMessage;
+      this.bagMessage = this.courseBundleMessage;
+    });
+  }
+
   changeQuantity(item: BagItem, change: number): void {
     const userId = this.authService.currentUserId;
     const quantity = item.quantity + change;
@@ -816,6 +1221,15 @@ export class BookstoreDashboardComponent {
       return;
     }
 
+    if (this.isStudent) {
+      if (!this.staffAuthorization) {
+        this.requestStaffVerification('remove-cart-item', item.cartItemId);
+        return;
+      }
+      this.removeStudentCartItem(item.cartItemId, this.staffAuthorization);
+      return;
+    }
+
     this.storeApi.removeCartItem(userId, item.cartItemId).subscribe({
       next: () => {
         this.loadCart();
@@ -823,6 +1237,87 @@ export class BookstoreDashboardComponent {
       },
       error: error => this.checkoutMessage = this.getApiError(error, 'Could not remove this item.')
     });
+  }
+
+  private removeStudentCartItem(cartItemId: number, staffAuthorization: string): void {
+    const userId = this.authService.currentUserId;
+    if (userId === null || this.staffCartItemRemovalLoading) {
+      return;
+    }
+
+    this.staffCartItemRemovalLoading = true;
+    this.storeApi.removeCartItemAsStaff(userId, cartItemId, staffAuthorization).subscribe({
+      next: removal => {
+        this.staffCartItemRemovalLoading = false;
+        this.checkoutMessage = this.staffCartItemRemovalMessage(removal);
+        this.loadCart();
+      },
+      error: error => {
+        this.staffCartItemRemovalLoading = false;
+        if (error instanceof HttpErrorResponse && error.status === 403) {
+          this.staffAuthorization = null;
+          this.requestStaffVerification('remove-cart-item', cartItemId);
+          return;
+        }
+        this.checkoutMessage = this.getApiError(error, 'Could not remove this item as staff.');
+      }
+    });
+  }
+
+  private staffCartItemRemovalMessage(removal: ApiStaffCartItemRemoval): string {
+    const removedAt = new Date(removal.removed_at).toLocaleString();
+    return `Removed ${removal.item_name} (quantity ${removal.quantity_removed}) by staff ID ${removal.staff_id} at ${removedAt}.`;
+  }
+
+  private changeStudentCartItemPrice(
+    cartItemId: number,
+    newPrice: number,
+    reason: string,
+    staffAuthorization: string
+  ): void {
+    const userId = this.authService.currentUserId;
+    if (userId === null || this.staffItemPriceChangeLoading) {
+      return;
+    }
+
+    this.staffItemPriceChangeLoading = true;
+    this.storeApi.changeCartItemPriceAsStaff(
+      userId,
+      cartItemId,
+      newPrice,
+      reason,
+      staffAuthorization
+    ).subscribe({
+      next: change => {
+        this.staffItemPriceChangeLoading = false;
+        this.checkoutMessage = this.staffCartItemPriceChangeMessage(change);
+        this.staffItemPriceDraft = null;
+        this.staffItemPriceReason = '';
+        this.loadCart();
+        this.loadCatalog();
+      },
+      error: error => {
+        this.staffItemPriceChangeLoading = false;
+        if (error instanceof HttpErrorResponse && error.status === 403) {
+          this.staffAuthorization = null;
+          this.staffItemPriceDraft = newPrice;
+          this.staffItemPriceReason = reason;
+          this.requestStaffVerification('change-item-price', cartItemId);
+          return;
+        }
+        this.checkoutMessage = this.getApiError(error, 'Could not change this item price.');
+      }
+    });
+  }
+
+  private staffCartItemPriceChangeMessage(change: ApiStaffCartItemPriceChange): string {
+    return `Updated ${change.item_name} from ${Number(change.original_price).toLocaleString('en-US', {
+      style: 'currency',
+      currency: 'USD'
+    })} to ${Number(change.new_price).toLocaleString('en-US', {
+      style: 'currency',
+      currency: 'USD'
+    })} by staff ID ${change.staff_id}. Reason: ${change.reason}`;
   }
 
   cancelTransaction(): void {
@@ -865,6 +1360,11 @@ export class BookstoreDashboardComponent {
       return;
     }
 
+    if (this.checkoutNeedsStaffVerification && !this.staffAuthorization) {
+      this.requestStaffVerification('checkout');
+      return;
+    }
+
     const userId = this.authService.currentUserId;
     if (userId === null) {
       this.checkoutMessage = 'Use a numeric Django user ID to complete this demo checkout.';
@@ -887,17 +1387,32 @@ export class BookstoreDashboardComponent {
     this.clearCardDetails();
     this.processingPayment = true;
     this.checkoutMessage = '';
-    this.storeApi.checkout(userId, payload).subscribe({
+    this.storeApi.checkout(userId, payload, this.staffAuthorization).subscribe({
       next: receipt => this.finishSale(receipt),
       error: error => {
         this.processingPayment = false;
+        if (error instanceof HttpErrorResponse &&
+            error.status === 403 &&
+            this.checkoutNeedsStaffVerification) {
+          this.staffAuthorization = null;
+          this.requestStaffVerification('checkout');
+          return;
+        }
         this.checkoutMessage = this.getApiError(error, 'Could not complete the payment. Your cart has not been changed.');
       }
     });
   }
 
+  private get checkoutNeedsStaffVerification(): boolean {
+    return Boolean(this.appliedStudentId) ||
+      (this.isManager && this.useEmployeeDiscount) ||
+      this.isOperator;
+  }
+
   private finishSale(receipt: ApiSaleReceipt): void {
     this.receipt = this.toSaleReceipt(receipt);
+    const staffAuthorization = this.staffAuthorization;
+    const wasStudentOverride = this.isStudent && Boolean(this.appliedStudentId);
 
     this.bag = [];
     this.resetDiscountSelection();
@@ -908,6 +1423,12 @@ export class BookstoreDashboardComponent {
     this.processingPayment = false;
     this.showBag = false;
     this.showReceipt = true;
+    if (
+      receipt.payment_method === 'cash' &&
+      ((this.isManager || this.isOperator) || wasStudentOverride)
+    ) {
+      this.loadCashDrawer(staffAuthorization);
+    }
     this.loadCatalog();
   }
 
@@ -950,6 +1471,7 @@ export class BookstoreDashboardComponent {
       return;
     }
 
+    this.closeDailySalesReport();
     this.showSalesHistory = true;
     this.salesHistoryLoading = true;
     this.salesHistoryError = '';
@@ -968,6 +1490,90 @@ export class BookstoreDashboardComponent {
   closeSalesHistory(): void {
     this.showSalesHistory = false;
     this.salesSearch = '';
+  }
+
+  openDailySalesReport(): void {
+    if (!this.isManager) {
+      return;
+    }
+
+    this.closeSalesHistory();
+    this.showDailySalesReport = true;
+    this.dailySalesReportDate = this.localDateInputValue(new Date());
+    this.loadDailySalesReport();
+  }
+
+  loadDailySalesReport(): void {
+    if (!this.isManager || this.dailySalesReportLoading || !this.dailySalesReportDate) {
+      return;
+    }
+
+    this.dailySalesReportLoading = true;
+    this.dailySalesReportError = '';
+    this.storeApi.getDailySalesReport(this.dailySalesReportDate).subscribe({
+      next: report => {
+        this.dailySalesReport = report;
+        this.dailySalesReceipts = report.receipts.map(receipt => this.toSaleReceipt(receipt));
+        this.dailySalesReportLoading = false;
+      },
+      error: error => {
+        this.dailySalesReportError = this.getApiError(error, 'Could not load the daily sales report.');
+        this.dailySalesReportLoading = false;
+      }
+    });
+  }
+
+  closeDailySalesReport(): void {
+    this.showDailySalesReport = false;
+  }
+
+  openBestSellingItemsReport(): void {
+    if (!this.isManager) {
+      return;
+    }
+
+    this.closeSalesHistory();
+    this.closeDailySalesReport();
+    this.showBestSellingItemsReport = true;
+    this.bestSellingStartDate = this.localDateInputValue(new Date());
+    this.bestSellingEndDate = this.localDateInputValue(new Date());
+    this.loadBestSellingItemsReport();
+  }
+
+  loadBestSellingItemsReport(): void {
+    if (!this.isManager || this.bestSellingItemsReportLoading ||
+        !this.bestSellingStartDate || !this.bestSellingEndDate) {
+      return;
+    }
+    if (this.bestSellingStartDate > this.bestSellingEndDate) {
+      this.bestSellingItemsReportError = 'End date must be on or after start date.';
+      this.bestSellingItemsReport = null;
+      return;
+    }
+
+    this.bestSellingItemsReportLoading = true;
+    this.bestSellingItemsReportError = '';
+    this.storeApi.getBestSellingItemsReport(this.bestSellingStartDate, this.bestSellingEndDate).subscribe({
+      next: report => {
+        this.bestSellingItemsReport = report;
+        this.bestSellingItemsReportLoading = false;
+      },
+      error: error => {
+        this.bestSellingItemsReportError = this.getApiError(error, 'Could not load best-selling items.');
+        this.bestSellingItemsReportLoading = false;
+      }
+    });
+  }
+
+  closeBestSellingItemsReport(): void {
+    this.showBestSellingItemsReport = false;
+  }
+
+  private localDateInputValue(date: Date): string {
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
   }
 
   closeReceipt(): void {
@@ -1457,9 +2063,10 @@ export class BookstoreDashboardComponent {
     this.apiError = '';
     forkJoin({
       categories: this.storeApi.getCategories(),
-      items: this.storeApi.getItems()
+      items: this.storeApi.getItems(),
+      courseSupplyBundles: this.storeApi.getCourseSupplyBundles()
     }).subscribe({
-      next: ({ categories, items }) => {
+      next: ({ categories, items, courseSupplyBundles }) => {
         this.categoryIds.clear();
         this.categoryTaxExemptById.clear();
         this.categoryDiscountsById.clear();
@@ -1470,6 +2077,7 @@ export class BookstoreDashboardComponent {
         }
         this.categories = ['All items', ...categories.map(category => category.category_name)];
         this.books = items.map(item => this.toBook(item));
+        this.courseSupplyBundles = courseSupplyBundles;
         for (const book of this.books) {
           if (
             this.selectedVariantIds[book.id] !== undefined &&
@@ -1572,7 +2180,11 @@ export class BookstoreDashboardComponent {
 
     const requestId = ++this.cartRequestId;
     this.cartLoading = true;
-    this.storeApi.getCart(userId, this.discountRequest(studentId)).subscribe({
+    this.storeApi.getCart(
+      userId,
+      this.discountRequest(studentId),
+      this.staffAuthorization
+    ).subscribe({
       next: cart => {
         if (requestId !== this.cartRequestId) {
           return;
@@ -1607,6 +2219,15 @@ export class BookstoreDashboardComponent {
         }
 
         this.cartLoading = false;
+        if (error instanceof HttpErrorResponse &&
+            error.status === 403 &&
+            (Boolean(studentId) || (this.isManager && this.useEmployeeDiscount))) {
+          this.staffAuthorization = null;
+          this.requestStaffVerification(
+            studentId ? 'student-id' : 'employee-discount'
+          );
+          return;
+        }
         if (studentId && error instanceof HttpErrorResponse && error.status === 400) {
           this.studentIdError = this.getApiError(error, 'Enter a valid student ID.');
           this.loadCart('');

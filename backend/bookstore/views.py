@@ -1,9 +1,13 @@
+from datetime import datetime
 from decimal import Decimal, InvalidOperation
 from uuid import uuid4
 
-from django.db import transaction
 from django.contrib.auth import get_user_model
 from django.contrib.auth import authenticate
+from django.core import signing
+from django.db import transaction
+from django.db.models import CharField, Count, F, Sum, Value
+from django.db.models.functions import Coalesce
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 
@@ -14,10 +18,31 @@ from rest_framework.response import Response
 from rest_framework.throttling import ScopedRateThrottle
 from rest_framework.views import APIView
 
-from .models import Category, Item, ItemVariant, Cart, CartItem, Sale, SaleItem
-from .permissions import IsCartOwner, IsManager, IsManagerOrReadOnly, user_role
+from .models import (
+    Category,
+    CashDrawer,
+    CourseSupplyBundle,
+    Item,
+    ItemVariant,
+    Cart,
+    CartItem,
+    Sale,
+    SaleItem,
+    StaffCartItemRemoval,
+    StaffCartItemPriceChange,
+    StaffCredential,
+)
+from .permissions import (
+    IsCartOwner,
+    IsCashDrawerStaff,
+    IsManager,
+    IsManagerOrReadOnly,
+    user_role,
+)
 from .serializers import (
     CategorySerializer,
+    CashDrawerSerializer,
+    CourseSupplyBundleSerializer,
     ItemSerializer,
     ItemVariantSerializer,
     CartSerializer,
@@ -34,6 +59,62 @@ from .pricing import (
 
 
 User = get_user_model()
+STAFF_AUTHORIZATION_HEADER = "HTTP_X_STAFF_AUTHORIZATION"
+STAFF_AUTHORIZATION_SALT = "bookstore.staff-override"
+STAFF_AUTHORIZATION_MAX_AGE = 300
+STAFF_AUTHORIZATION_REQUIRED = "Staff ID and PIN verification is required for this override."
+
+
+def get_staff_authorization_user(request):
+    authorization = request.META.get(STAFF_AUTHORIZATION_HEADER, "")
+    if not authorization:
+        return None
+    try:
+        payload = signing.loads(
+            authorization,
+            salt=STAFF_AUTHORIZATION_SALT,
+            max_age=STAFF_AUTHORIZATION_MAX_AGE,
+        )
+    except signing.BadSignature:
+        return None
+
+    if not isinstance(payload, dict) or not isinstance(payload.get("staff_id"), int):
+        return None
+
+    staff_user = User.objects.filter(
+        pk=payload.get("staff_id"),
+        is_active=True,
+    ).first()
+    if (
+        staff_user is None
+        or user_role(staff_user) not in {"Manager", "Operator"}
+        or not StaffCredential.objects.filter(user=staff_user).exists()
+    ):
+        return None
+    return staff_user
+
+
+def has_staff_authorization(request):
+    return get_staff_authorization_user(request) is not None
+
+
+def requires_staff_authorization(request, student_id, use_employee_discount):
+    return (
+        bool(str(student_id or "").strip())
+        or str(use_employee_discount).lower() == "true"
+        or (
+            request.method == "POST"
+            and user_role(request.user) == "Operator"
+        )
+    )
+
+
+class StaffPinThrottle(ScopedRateThrottle):
+    def get_cache_key(self, request, view):
+        return self.cache_format % {
+            "scope": self.scope,
+            "ident": self.get_ident(request),
+        }
 
 
 class CategoryViewSet(viewsets.ModelViewSet):
@@ -60,6 +141,22 @@ class ItemViewSet(viewsets.ModelViewSet):
     )
     serializer_class = ItemSerializer
     permission_classes = [IsManagerOrReadOnly]
+
+    def destroy(self, request, *args, **kwargs):
+        item = self.get_object()
+        if item.course_supply_bundles.exists():
+            return Response(
+                {"detail": "Remove this item from its course supply bundles before deleting it."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        return super().destroy(request, *args, **kwargs)
+
+
+class CourseSupplyBundleViewSet(viewsets.ModelViewSet):
+    queryset = CourseSupplyBundle.objects.prefetch_related("items").all()
+    serializer_class = CourseSupplyBundleSerializer
+    permission_classes = [IsManagerOrReadOnly]
+
 
 class ItemVariantCollectionView(APIView):
     permission_classes = [IsManagerOrReadOnly]
@@ -160,6 +257,134 @@ class SaleViewSet(viewsets.ReadOnlyModelViewSet):
     permission_classes = [IsManager]
 
 
+class DailySalesReportView(APIView):
+    permission_classes = [IsManager]
+
+    def get(self, request):
+        date_input = request.query_params.get("date")
+        if date_input is None:
+            report_date = timezone.localdate()
+        else:
+            try:
+                report_date = datetime.strptime(date_input, "%Y-%m-%d").date()
+            except (TypeError, ValueError):
+                return Response(
+                    {"date": "Enter a valid date in YYYY-MM-DD format."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+        sales = (
+            Sale.objects
+            .filter(created_at__date=report_date)
+            .prefetch_related("sale_items")
+            .order_by("-created_at", "-pk")
+        )
+        totals = sales.aggregate(total=Sum("total"), sales_count=Count("pk"))
+        category_totals = (
+            SaleItem.objects
+            .filter(sale__created_at__date=report_date)
+            .annotate(
+                category_name=Coalesce(
+                    F("item__category__category_name"),
+                    Value("Uncategorized"),
+                    output_field=CharField(),
+                ),
+                amount=F("line_total") + F("tax_amount"),
+            )
+            .values("category_name")
+            .annotate(total=Sum("amount"))
+            .order_by("category_name")
+        )
+        return Response({
+            "date": report_date.isoformat(),
+            "total_money_taken_in": format(totals["total"] or Decimal("0.00"), ".2f"),
+            "sales_count": totals["sales_count"],
+            "category_breakdown": [
+                {
+                    "category": row["category_name"],
+                    "total": format(row["total"], ".2f"),
+                }
+                for row in category_totals
+            ],
+            "receipts": SaleReceiptSerializer(sales, many=True).data,
+        })
+
+
+class BestSellingItemsReportView(APIView):
+    permission_classes = [IsManager]
+
+    def get(self, request):
+        start_input = request.query_params.get("start_date")
+        end_input = request.query_params.get("end_date")
+        errors = {}
+        parsed_dates = {}
+        for field, value in (("start_date", start_input), ("end_date", end_input)):
+            try:
+                parsed_dates[field] = datetime.strptime(value or "", "%Y-%m-%d").date()
+            except ValueError:
+                errors[field] = "Enter a valid date in YYYY-MM-DD format."
+        if errors:
+            return Response(errors, status=status.HTTP_400_BAD_REQUEST)
+        start_date = parsed_dates["start_date"]
+        end_date = parsed_dates["end_date"]
+        if start_date > end_date:
+            return Response(
+                {"end_date": "End date must be on or after start date."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        items = (
+            SaleItem.objects
+            .filter(
+                sale__created_at__date__gte=start_date,
+                sale__created_at__date__lte=end_date,
+            )
+            .values("item_name", "item_code")
+            .annotate(quantity_sold=Sum("quantity"))
+            .order_by("-quantity_sold", "item_name", "item_code")
+        )
+        return Response({
+            "start_date": start_date.isoformat(),
+            "end_date": end_date.isoformat(),
+            "items": [
+                {
+                    "item_name": item["item_name"],
+                    "item_code": item["item_code"],
+                    "quantity_sold": item["quantity_sold"],
+                }
+                for item in items
+            ],
+        })
+
+
+class CashDrawerView(APIView):
+    permission_classes = [IsCashDrawerStaff]
+
+    def get_drawer(self, *, lock=False):
+        CashDrawer.objects.get_or_create(pk=1)
+        queryset = CashDrawer.objects.select_for_update() if lock else CashDrawer.objects
+        return queryset.get(pk=1)
+
+    def get(self, request):
+        if (
+            user_role(request.user) not in {"Manager", "Operator"}
+            and not has_staff_authorization(request)
+        ):
+            return Response(
+                {"detail": STAFF_AUTHORIZATION_REQUIRED},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        drawer = self.get_drawer()
+        return Response(CashDrawerSerializer(drawer).data)
+
+    def patch(self, request):
+        with transaction.atomic():
+            drawer = self.get_drawer(lock=True)
+            serializer = CashDrawerSerializer(drawer, data=request.data, partial=True)
+            serializer.is_valid(raise_exception=True)
+            serializer.save()
+        return Response(serializer.data)
+
+
 class LoginView(APIView):
     permission_classes = [AllowAny]
     authentication_classes = []
@@ -205,6 +430,54 @@ class LoginView(APIView):
         })
 
 
+class StaffPinVerificationView(APIView):
+    permission_classes = [IsAuthenticated]
+    throttle_classes = [StaffPinThrottle]
+    throttle_scope = "staff_pin"
+
+    def post(self, request):
+        staff_id = request.data.get("staff_id")
+        pin = request.data.get("pin")
+        if (
+            not isinstance(staff_id, (str, int))
+            or isinstance(staff_id, bool)
+            or not str(staff_id).isdecimal()
+            or not isinstance(pin, str)
+            or not pin.isascii()
+            or not pin.isdigit()
+            or not 4 <= len(pin) <= 12
+        ):
+            return Response(
+                {"detail": "Invalid staff ID or PIN."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        staff_user = User.objects.filter(
+            pk=int(staff_id),
+            is_active=True,
+        ).first()
+        credential = (
+            StaffCredential.objects.filter(user=staff_user).first()
+            if staff_user is not None
+            and user_role(staff_user) in {"Manager", "Operator"}
+            else None
+        )
+        if credential is None or not credential.check_pin(pin):
+            return Response(
+                {"detail": "Invalid staff ID or PIN."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        authorization = signing.dumps(
+            {"staff_id": staff_user.pk},
+            salt=STAFF_AUTHORIZATION_SALT,
+        )
+        return Response({
+            "staff_authorization": authorization,
+            "expires_in": STAFF_AUTHORIZATION_MAX_AGE,
+        })
+
+
 class LogoutView(APIView):
     permission_classes = [IsAuthenticated]
 
@@ -218,12 +491,22 @@ class CartView(APIView):
 
     def get(self, request, user_id):
         user = get_object_or_404(User, id=user_id)
+        student_id = request.query_params.get("student_id")
+        use_employee_discount = request.query_params.get("use_employee_discount")
+        if (
+            requires_staff_authorization(request, student_id, use_employee_discount)
+            and not has_staff_authorization(request)
+        ):
+            return Response(
+                {"detail": STAFF_AUTHORIZATION_REQUIRED},
+                status=status.HTTP_403_FORBIDDEN,
+            )
 
         try:
             customer_discount_type = resolve_customer_discount(
                 request.user,
-                request.query_params.get("student_id"),
-                request.query_params.get("use_employee_discount"),
+                student_id,
+                use_employee_discount,
             )
         except InvalidStudentId:
             return Response(
@@ -420,6 +703,116 @@ class CartItemDetailView(APIView):
         )
 
 
+class StaffCartItemRemovalView(APIView):
+    permission_classes = [IsCartOwner]
+
+    def post(self, request, user_id, cart_item_id):
+        staff_user = get_staff_authorization_user(request)
+        if staff_user is None:
+            return Response(
+                {"detail": STAFF_AUTHORIZATION_REQUIRED},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        with transaction.atomic():
+            cart_item = get_object_or_404(
+                CartItem.objects.select_for_update().select_related("item", "variant"),
+                pk=cart_item_id,
+                cart__user_id=user_id,
+            )
+            removal = StaffCartItemRemoval.objects.create(
+                student_user_id=user_id,
+                staff_user_id=staff_user.pk,
+                cart_item_id=cart_item.pk,
+                item_name=cart_item.item.item,
+                item_code=cart_item.item.item_code,
+                variant_size=cart_item.variant.size if cart_item.variant_id else "",
+                variant_color=cart_item.variant.color if cart_item.variant_id else "",
+                quantity_removed=cart_item.quantity,
+            )
+            cart_item.delete()
+
+        return Response({
+            "staff_id": removal.staff_user_id,
+            "removed_at": removal.removed_at,
+            "item_name": removal.item_name,
+            "quantity_removed": removal.quantity_removed,
+        })
+
+
+class StaffCartItemPriceChangeView(APIView):
+    permission_classes = [IsCartOwner]
+
+    def post(self, request, user_id, cart_item_id):
+        staff_user = get_staff_authorization_user(request)
+        if staff_user is None:
+            return Response(
+                {"detail": STAFF_AUTHORIZATION_REQUIRED},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        try:
+            new_price = Decimal(str(request.data.get("new_price", "")))
+        except (InvalidOperation, TypeError, ValueError):
+            return Response(
+                {"new_price": "Enter a valid price between $0.00 and $999.99."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if (
+            not new_price.is_finite()
+            or new_price < 0
+            or new_price > Decimal("999.99")
+            or new_price != new_price.quantize(Decimal("0.01"))
+        ):
+            return Response(
+                {"new_price": "Enter a valid price between $0.00 and $999.99 with at most two decimal places."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        reason = request.data.get("reason")
+        if not isinstance(reason, str) or not reason.strip():
+            return Response(
+                {"reason": "Enter a reason for changing the price."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        reason = reason.strip()
+        if len(reason) > 500:
+            return Response(
+                {"reason": "The reason must be 500 characters or fewer."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        with transaction.atomic():
+            cart_item = get_object_or_404(
+                CartItem.objects.select_for_update().select_related("item", "variant"),
+                pk=cart_item_id,
+                cart__user_id=user_id,
+            )
+            item = Item.objects.select_for_update().get(pk=cart_item.item_id)
+            original_price = item.item_price
+            item.item_price = new_price
+            item.save(update_fields=["item_price"])
+            price_change = StaffCartItemPriceChange.objects.create(
+                student_user_id=user_id,
+                staff_user_id=staff_user.pk,
+                cart_item_id=cart_item.pk,
+                item_name=item.item,
+                item_code=item.item_code,
+                original_price=original_price,
+                new_price=new_price,
+                reason=reason,
+            )
+
+        return Response({
+            "staff_id": price_change.staff_user_id,
+            "changed_at": price_change.changed_at,
+            "item_name": price_change.item_name,
+            "original_price": price_change.original_price,
+            "new_price": price_change.new_price,
+            "reason": price_change.reason,
+        })
+
+
 class CheckoutView(APIView):
     permission_classes = [IsCartOwner]
 
@@ -452,11 +845,22 @@ class CheckoutView(APIView):
                 )
             cash_received = cash_received.quantize(Decimal("0.01"))
 
+        student_id = request.data.get("student_id")
+        use_employee_discount = request.data.get("use_employee_discount")
+        if (
+            requires_staff_authorization(request, student_id, use_employee_discount)
+            and not has_staff_authorization(request)
+        ):
+            return Response(
+                {"detail": STAFF_AUTHORIZATION_REQUIRED},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
         try:
             customer_discount_type = resolve_customer_discount(
                 request.user,
-                request.data.get("student_id"),
-                request.data.get("use_employee_discount"),
+                student_id,
+                use_employee_discount,
             )
         except InvalidStudentId:
             return Response(
@@ -598,6 +1002,10 @@ class CheckoutView(APIView):
                 cash_received=cash_received,
                 change_due=(cash_received - total if cash_received is not None else Decimal("0.00")),
             )
+            if payment_method == "cash":
+                drawer = self.get_locked_cash_drawer()
+                drawer.balance += cash_received - sale.change_due
+                drawer.save(update_fields=["balance"])
 
             for cart_item in cart_items:
                 item = locked_items[cart_item.item_id]
@@ -634,3 +1042,7 @@ class CheckoutView(APIView):
             serializer = SaleReceiptSerializer(sale)
 
         return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+    def get_locked_cash_drawer(self):
+        CashDrawer.objects.get_or_create(pk=1)
+        return CashDrawer.objects.select_for_update().get(pk=1)

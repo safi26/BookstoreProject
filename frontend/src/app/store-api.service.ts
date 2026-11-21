@@ -80,7 +80,13 @@ export interface ApiCart {
   customer_discount_amount: string;
   tax_amount: string;
   total_price: string;
+  voucher_id: string;
+  voucher_balance: string;
+  voucher_amount: string;
+  amount_due: string;
 }
+
+export type PaymentMethod = 'cash' | 'card' | 'voucher';
 
 export interface ApiSaleItem {
   item_name: string;
@@ -108,13 +114,15 @@ export interface ApiSaleReceipt {
   customer_discount_amount: string;
   tax_amount: string;
   total: string;
-  payment_method: 'cash' | 'card';
+  voucher_code: string;
+  voucher_amount: string;
+  payment_method: PaymentMethod;
   cash_received: string | null;
   change_due: string;
 }
 
 export interface CheckoutPayload extends CustomerDiscountRequest {
-  payment_method: 'cash' | 'card';
+  payment_method: PaymentMethod;
   cash_received?: string;
 }
 

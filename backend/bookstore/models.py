@@ -1,6 +1,10 @@
+from decimal import Decimal
+
 from django.db import models, transaction
 from django.conf import settings
 from django.contrib.auth.hashers import check_password, make_password
+from django.core.exceptions import ValidationError
+from django.core.validators import MinValueValidator
 from django.db.models import Q
 
 class Category(models.Model):
@@ -268,12 +272,45 @@ class StudentId(models.Model):
     student_id = models.CharField(max_length=30, unique=True)
     is_active = models.BooleanField(default=True)
 
+    def clean(self):
+        super().clean()
+        if self.student_id and Voucher.objects.filter(voucher_id=self.student_id).exists():
+            raise ValidationError({"student_id": "A voucher already uses this ID."})
+
     def __str__(self):
         return self.student_id
 
     class Meta:
         verbose_name = "Student ID"
         verbose_name_plural = "Student IDs"
+
+
+class Voucher(models.Model):
+    voucher_id = models.CharField(max_length=30, unique=True)
+    balance = models.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        validators=[MinValueValidator(Decimal("0.01"))],
+    )
+    is_active = models.BooleanField(default=True)
+
+    def clean(self):
+        super().clean()
+        if self.voucher_id and StudentId.objects.filter(student_id=self.voucher_id).exists():
+            raise ValidationError({"voucher_id": "A student ID already uses this ID."})
+
+    def __str__(self):
+        return self.voucher_id
+
+    class Meta:
+        verbose_name = "Voucher"
+        verbose_name_plural = "Vouchers"
+        constraints = [
+            models.CheckConstraint(
+                condition=Q(balance__gte=0),
+                name="voucher_balance_not_negative",
+            ),
+        ]
 
 
 class StaffCredential(models.Model):
@@ -310,6 +347,7 @@ class Sale(models.Model):
     PAYMENT_METHODS = [
         ("cash", "Cash"),
         ("card", "Card (demo)"),
+        ("voucher", "Voucher"),
     ]
     CUSTOMER_DISCOUNT_TYPES = [
         ("student", "Student"),
@@ -335,6 +373,8 @@ class Sale(models.Model):
     customer_discount_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     tax_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     total = models.DecimalField(max_digits=10, decimal_places=2)
+    voucher_code = models.CharField(max_length=30, blank=True, default="")
+    voucher_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     cash_received = models.DecimalField(
         max_digits=10,
         decimal_places=2,

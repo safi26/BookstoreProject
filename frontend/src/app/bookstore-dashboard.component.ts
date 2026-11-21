@@ -21,6 +21,7 @@ import {
   CustomerDiscountRequest,
   CustomerDiscountType,
   ExemptionSettings,
+  PaymentMethod,
   ItemPayload,
   ItemVariantPayload,
   StoreApiService
@@ -109,7 +110,9 @@ interface SaleReceipt {
   customerDiscountAmount: number;
   taxAmount: number;
   total: number;
-  paymentMethod: 'cash' | 'card';
+  voucherCode: string;
+  voucherAmount: number;
+  paymentMethod: PaymentMethod;
   cashReceived?: number;
   changeDue?: number;
 }
@@ -175,6 +178,8 @@ export class BookstoreDashboardComponent {
   studentIdError = '';
   studentDiscountNotApplicable = false;
   appliedStudentDiscountPercent = 0;
+  appliedVoucherId = '';
+  appliedVoucherBalance = 0;
   useEmployeeDiscount = false;
   staffAuthorization: string | null = null;
   showStaffPinDialog = false;
@@ -215,7 +220,7 @@ export class BookstoreDashboardComponent {
   bestSellingItemsReport: ApiBestSellingItemsReport | null = null;
   bestSellingStartDate = this.localDateInputValue(new Date());
   bestSellingEndDate = this.localDateInputValue(new Date());
-  paymentMethod: 'cash' | 'card' = 'cash';
+  paymentMethod: PaymentMethod = 'cash';
   cashReceived: number | null = null;
   showCardDialog = false;
   cardholderName = '';
@@ -605,12 +610,26 @@ export class BookstoreDashboardComponent {
     return Math.round((this.bagSubtotal - this.bagCustomerDiscount + this.bagTax) * 100) / 100;
   }
 
+  /** What the applied voucher pays toward this cart. */
+  get voucherCovered(): number {
+    return this.appliedVoucherId ? Math.min(this.appliedVoucherBalance, this.bagTotal) : 0;
+  }
+
+  /** What is left for cash or card after the voucher. */
+  get amountDue(): number {
+    return Math.round((this.bagTotal - this.voucherCovered) * 100) / 100;
+  }
+
+  get voucherCoversTotal(): boolean {
+    return Boolean(this.appliedVoucherId) && this.bag.length > 0 && this.amountDue <= 0;
+  }
+
   get studentIdBlocksPayment(): boolean {
     return this.isStudent && this.studentIdInput.trim() !== this.appliedStudentId;
   }
 
   get changeDue(): number {
-    return Math.max(0, Number(this.cashReceived ?? 0) - this.bagTotal);
+    return Math.max(0, Number(this.cashReceived ?? 0) - this.amountDue);
   }
 
   get projectedCashDrawerBalance(): number {
@@ -626,7 +645,7 @@ export class BookstoreDashboardComponent {
       Boolean(this.staffAuthorization) &&
       this.paymentMethod === 'cash' &&
       this.cashReceived !== null &&
-      this.cashReceived >= this.bagTotal &&
+      this.cashReceived >= this.amountDue &&
       this.cashDrawer !== null &&
       this.projectedCashDrawerBalance < Number(this.cashDrawer.low_change_threshold);
   }
@@ -687,12 +706,13 @@ export class BookstoreDashboardComponent {
     return this.canCheckout && this.bag.length > 0 &&
       !this.cartLoading &&
       !this.studentIdBlocksPayment &&
-      (this.paymentMethod === 'card'
-        ? this.cardholderNameIsValid &&
-          this.cardNumberIsValid &&
-          this.cardExpiryIsValid &&
-          this.cardCvvIsValid
-        : this.cashReceived !== null && Number(this.cashReceived) >= this.bagTotal);
+      (this.voucherCoversTotal ||
+        (this.paymentMethod === 'card'
+          ? this.cardholderNameIsValid &&
+            this.cardNumberIsValid &&
+            this.cardExpiryIsValid &&
+            this.cardCvvIsValid
+          : this.cashReceived !== null && Number(this.cashReceived) >= this.amountDue));
   }
 
   getItemDiscountAmount(item: BagItem): number {
@@ -902,8 +922,14 @@ export class BookstoreDashboardComponent {
     this.appliedStudentId = '';
     this.studentIdError = '';
     this.studentDiscountNotApplicable = false;
+    this.appliedVoucherId = '';
+    this.appliedVoucherBalance = 0;
     this.useEmployeeDiscount = false;
     this.staffAuthorization = null;
+  }
+
+  paymentMethodLabel(method: PaymentMethod): string {
+    return { cash: 'Cash', card: 'Card (demo)', voucher: 'Voucher' }[method];
   }
 
   closeCardDialog(): void {
@@ -1371,7 +1397,8 @@ export class BookstoreDashboardComponent {
       return;
     }
 
-    if (this.paymentMethod === 'card' && this.cardNumber.replace(/[\s-]/g, '').endsWith('0000')) {
+    const paymentMethod: PaymentMethod = this.voucherCoversTotal ? 'voucher' : this.paymentMethod;
+    if (paymentMethod === 'card' && this.cardNumber.replace(/[\s-]/g, '').endsWith('0000')) {
       this.clearCardDetails();
       this.checkoutMessage = 'Card declined in demo. Your cart has not been changed and no charge was made.';
       return;
@@ -1379,8 +1406,8 @@ export class BookstoreDashboardComponent {
 
     const payload: CheckoutPayload = {
       ...this.discountRequest(this.appliedStudentId),
-      payment_method: this.paymentMethod,
-      ...(this.paymentMethod === 'cash'
+      payment_method: paymentMethod,
+      ...(paymentMethod === 'cash'
         ? { cash_received: Number(this.cashReceived).toFixed(2) }
         : {})
     };
@@ -1459,6 +1486,8 @@ export class BookstoreDashboardComponent {
       customerDiscountAmount: Number(receipt.customer_discount_amount),
       taxAmount: Number(receipt.tax_amount),
       total: Number(receipt.total),
+      voucherCode: receipt.voucher_code ?? '',
+      voucherAmount: Number(receipt.voucher_amount ?? 0),
       paymentMethod: receipt.payment_method,
       ...(receipt.cash_received !== null
         ? { cashReceived: Number(receipt.cash_received), changeDue: Number(receipt.change_due) }
@@ -2194,6 +2223,8 @@ export class BookstoreDashboardComponent {
         this.appliedStudentId = studentId;
         this.studentIdInput = studentId;
         this.appliedStudentDiscountPercent = Number(cart.customer_discount_percent);
+        this.appliedVoucherId = cart.voucher_id ?? '';
+        this.appliedVoucherBalance = Number(cart.voucher_balance ?? 0);
         this.bagCustomerDiscountLabel = this.customerDiscountLabel(
           cart.customer_discount_type,
           cart.customer_discount_percent
@@ -2229,7 +2260,7 @@ export class BookstoreDashboardComponent {
           return;
         }
         if (studentId && error instanceof HttpErrorResponse && error.status === 400) {
-          this.studentIdError = this.getApiError(error, 'Enter a valid student ID.');
+          this.studentIdError = this.getApiError(error, 'Enter a valid student ID or voucher ID.');
           this.loadCart('');
           return;
         }

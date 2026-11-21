@@ -2126,11 +2126,6 @@
   list-style-position: inside;
 }
 
-.student-id-summary-value {
-  color: #315e4a;
-  font-size: 10px;
-}
-
 .student-id-details-content {
   display: grid;
   gap: 7px;
@@ -2262,6 +2257,27 @@
   margin: 0;
   color: #405a4d;
   font-size: 11px;
+}
+
+.bag-checkout > .voucher-row,
+.card-dialog-total.voucher-row {
+  color: #29463c;
+}
+
+.voucher-remaining {
+  margin: 0 0 14px;
+  padding: 8px 10px;
+  border-left: 3px solid #c9893a;
+  background: #fbf3e6;
+  color: #5b3d14;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.voucher-remaining.is-covered {
+  border-left-color: #4d7a63;
+  background: #edf5ef;
+  color: #29463c;
 }
 
 .card-demo-note {

@@ -13,7 +13,7 @@ from .models import (
     Sale,
     SaleItem,
 )
-from .pricing import customer_discount_percent, price_line
+from .pricing import customer_discount_percent, price_line, voucher_split
 
 
 class CashDrawerSerializer(serializers.ModelSerializer):
@@ -322,6 +322,10 @@ class CartSerializer(serializers.ModelSerializer):
     customer_discount_amount = serializers.SerializerMethodField()
     tax_amount = serializers.SerializerMethodField()
     total_price = serializers.SerializerMethodField()
+    voucher_id = serializers.SerializerMethodField()
+    voucher_balance = serializers.SerializerMethodField()
+    voucher_amount = serializers.SerializerMethodField()
+    amount_due = serializers.SerializerMethodField()
 
     class Meta:
         model = Cart
@@ -337,6 +341,10 @@ class CartSerializer(serializers.ModelSerializer):
             "customer_discount_amount",
             "tax_amount",
             "total_price",
+            "voucher_id",
+            "voucher_balance",
+            "voucher_amount",
+            "amount_due",
             "created_at",
             "updated_at",
         ]
@@ -385,6 +393,23 @@ class CartSerializer(serializers.ModelSerializer):
             + self.get_tax_amount(obj)
         )
 
+    def _voucher_split(self, obj):
+        return voucher_split(self.context.get("voucher"), self.get_total_price(obj))
+
+    def get_voucher_id(self, obj):
+        voucher = self.context.get("voucher")
+        return voucher.voucher_id if voucher is not None else ""
+
+    def get_voucher_balance(self, obj):
+        voucher = self.context.get("voucher")
+        return voucher.balance if voucher is not None else Decimal("0.00")
+
+    def get_voucher_amount(self, obj):
+        return self._voucher_split(obj)[0]
+
+    def get_amount_due(self, obj):
+        return self._voucher_split(obj)[1]
+
 
 class SaleItemSerializer(serializers.ModelSerializer):
     class Meta:
@@ -422,6 +447,8 @@ class SaleReceiptSerializer(serializers.ModelSerializer):
             "customer_discount_amount",
             "tax_amount",
             "total",
+            "voucher_code",
+            "voucher_amount",
             "payment_method",
             "cash_received",
             "change_due",

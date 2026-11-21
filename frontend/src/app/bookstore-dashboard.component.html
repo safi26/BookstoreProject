@@ -524,28 +524,28 @@
       <div *ngIf="isStudent" class="student-id-entry">
         <details class="student-id-details">
           <summary>
-            <span>Student ID <span class="optional-label">Optional</span></span>
-            <span *ngIf="appliedStudentId" class="student-id-summary-value">
-              {{ appliedStudentId }} · {{ appliedStudentDiscountPercent }}% off
-            </span>
+            <span>Student ID or Voucher ID</span>
+            <span *ngIf="!appliedStudentId" class="optional-label">Optional</span>
           </summary>
           <div class="student-id-details-content">
             <div *ngIf="appliedStudentId; else studentIdForm" class="student-id-applied" role="status">
               <span class="student-id-pill">{{ appliedStudentId }}</span>
-              <span class="student-id-savings">{{ appliedStudentDiscountPercent }}% off</span>
+              <span class="student-id-savings">{{ appliedVoucherId
+                ? (appliedVoucherBalance | currency:'USD') + ' voucher balance'
+                : appliedStudentDiscountPercent + '% off' }}</span>
               <button type="button" class="student-id-remove" [disabled]="cartLoading"
-                [attr.aria-label]="'Remove student ID ' + appliedStudentId" (click)="removeStudentId()">Remove</button>
+                [attr.aria-label]="(appliedVoucherId ? 'Remove voucher ID ' : 'Remove student ID ') + appliedStudentId" (click)="removeStudentId()">Remove</button>
             </div>
             <ng-template #studentIdForm>
               <div class="student-id-row">
-                <input id="student-id" name="studentId" type="text" autocomplete="off" maxlength="30"
+                <input id="student-id" name="studentId" type="text" autocomplete="off" maxlength="30" aria-label="Student ID or Voucher ID"
                   [(ngModel)]="studentIdInput" (ngModelChange)="onStudentIdChange()" (keydown.enter)="applyStudentId()"
                   [attr.aria-invalid]="!!studentIdError" aria-describedby="student-id-message" />
                 <button type="button" [disabled]="!studentIdInput.trim() || cartLoading" (click)="applyStudentId()">Apply</button>
               </div>
             </ng-template>
             <p *ngIf="studentIdError" id="student-id-message" class="payment-error" role="alert">{{ studentIdError }}</p>
-            <p *ngIf="!studentIdError && studentIdBlocksPayment && studentIdInput.trim()" id="student-id-message" class="payment-error" role="status">Select Apply to check this ID, or clear it to pay full price.</p>
+            <p *ngIf="!studentIdError && studentIdBlocksPayment && studentIdInput.trim()" id="student-id-message" class="payment-error" role="status">Select Apply to check this ID, or clear it to pay without a discount or voucher.</p>
             <p *ngIf="studentDiscountNotApplicable && !studentIdBlocksPayment" class="student-discount-note" role="status">Discount does not apply to items in your cart</p>
           </div>
         </details>
@@ -563,18 +563,34 @@
       </div>
       <div><span>Tax (8.25%, unless exempt)</span><strong>{{ bagTax | currency:'USD' }}</strong></div>
       <div class="bag-total-row"><span>Total</span><strong>{{ bagTotal | currency:'USD' }}</strong></div>
-      <div *ngIf="canCheckout" class="payment-method" role="group" aria-label="Payment method">
+      <ng-container *ngIf="appliedVoucherId">
+        <div class="voucher-row"><span>Voucher {{ appliedVoucherId }}</span><strong>−{{ voucherCovered | currency:'USD' }}</strong></div>
+        <div class="bag-total-row"><span>Amount due</span><strong>{{ amountDue | currency:'USD' }}</strong></div>
+        <p *ngIf="!voucherCoversTotal" class="voucher-remaining" role="status">
+          The voucher covers {{ voucherCovered | currency:'USD' }}.
+          Pay the remaining <strong>{{ amountDue | currency:'USD' }}</strong> with cash or card.
+        </p>
+        <p *ngIf="voucherCoversTotal" class="voucher-remaining is-covered" role="status">
+          The voucher covers the full total.
+          {{ appliedVoucherBalance - voucherCovered | currency:'USD' }} will remain on the voucher.
+        </p>
+      </ng-container>
+      <button *ngIf="canCheckout && voucherCoversTotal" class="complete-payment" type="button"
+        [disabled]="!canCompleteSale || processingPayment || cancellingTransaction" (click)="completeSale()">
+        {{ processingPayment ? 'Processing payment...' : 'Complete voucher payment' }} <span>{{ bagTotal | currency:'USD' }}</span>
+      </button>
+      <div *ngIf="canCheckout && !voucherCoversTotal" class="payment-method" role="group" aria-label="Payment method">
         <button type="button" [class.is-selected]="paymentMethod === 'cash'" [attr.aria-pressed]="paymentMethod === 'cash'" (click)="selectPaymentMethod('cash')">Cash</button>
         <button type="button" [class.is-selected]="paymentMethod === 'card'" [attr.aria-pressed]="paymentMethod === 'card'" (click)="selectPaymentMethod('card')">Card</button>
       </div>
-      <div *ngIf="canCheckout && paymentMethod === 'cash'" class="cash-payment">
+      <div *ngIf="canCheckout && !voucherCoversTotal && paymentMethod === 'cash'" class="cash-payment">
         <label for="cash-received">Cash received</label>
         <div class="cash-input-row">
           <span>$</span>
           <input id="cash-received" name="cashReceived" type="number" min="0" step="0.01" [(ngModel)]="cashReceived" />
         </div>
-        <p *ngIf="cashReceived !== null && cashReceived < bagTotal" class="payment-error" role="alert">Amount received must cover the total.</p>
-        <p *ngIf="cashReceived !== null && cashReceived >= bagTotal" class="change-due">Change due <strong>{{ changeDue | currency:'USD' }}</strong></p>
+        <p *ngIf="cashReceived !== null && cashReceived < amountDue" class="payment-error" role="alert">Amount received must cover the {{ appliedVoucherId ? 'amount due' : 'total' }}.</p>
+        <p *ngIf="cashReceived !== null && cashReceived >= amountDue" class="change-due">Change due <strong>{{ changeDue | currency:'USD' }}</strong></p>
         <p *ngIf="showStudentLowChangeWarning" class="cash-drawer-warning cash-change-warning"
           role="alert" aria-live="assertive">
           <strong>Low change warning.</strong>
@@ -585,8 +601,8 @@
         <p *ngIf="isStudent && appliedStudentId && staffAuthorization && cashDrawerError"
           class="payment-error" role="alert">{{ cashDrawerError }}</p>
       </div>
-      <button *ngIf="canCheckout && paymentMethod === 'cash'" class="complete-payment" type="button" [disabled]="!canCompleteSale || processingPayment || cancellingTransaction" (click)="completeSale()">
-        {{ processingPayment ? 'Processing payment...' : 'Complete cash payment' }} <span>{{ bagTotal | currency:'USD' }}</span>
+      <button *ngIf="canCheckout && !voucherCoversTotal && paymentMethod === 'cash'" class="complete-payment" type="button" [disabled]="!canCompleteSale || processingPayment || cancellingTransaction" (click)="completeSale()">
+        {{ processingPayment ? 'Processing payment...' : 'Complete cash payment' }} <span>{{ amountDue | currency:'USD' }}</span>
       </button>
       <button *ngIf="canCheckout" class="cancel-transaction" type="button" [disabled]="processingPayment || cancellingTransaction"
         (click)="cancelTransaction()">{{ cancellingTransaction ? 'Canceling transaction...' : 'Cancel transaction' }}</button>
@@ -705,18 +721,22 @@
     </div>
     <p class="card-demo-note">Demo only: a number ending in 0000 simulates a decline. No real payment is processed; card details are not sent or saved.</p>
     <p *ngIf="checkoutMessage" class="payment-error card-dialog-message" role="alert">{{ checkoutMessage }}</p>
-    <p *ngIf="studentIdBlocksPayment" class="payment-error card-dialog-message" role="alert">Enter a valid student ID, or clear the field to pay full price.</p>
+    <p *ngIf="studentIdBlocksPayment" class="payment-error card-dialog-message" role="alert">Enter a valid student ID or voucher ID, or clear the field to pay without one.</p>
     <div class="card-dialog-total"><span>Subtotal before discounts</span><strong>{{ bagOriginalSubtotal | currency:'USD' }}</strong></div>
     <div *ngIf="bagDiscountTotal > 0" class="card-dialog-total"><span>Category discounts</span><strong>−{{ bagDiscountTotal | currency:'USD' }}</strong></div>
     <div class="card-dialog-total"><span>Subtotal</span><strong>{{ bagSubtotal | currency:'USD' }}</strong></div>
     <div *ngIf="bagCustomerDiscount > 0" class="card-dialog-total discount-row"><span>{{ bagCustomerDiscountLabel }}</span><strong>−{{ bagCustomerDiscount | currency:'USD' }}</strong></div>
     <div class="card-dialog-total"><span>Tax</span><strong>{{ bagTax | currency:'USD' }}</strong></div>
     <div class="card-dialog-total card-dialog-grand-total"><span>Total</span><strong>{{ bagTotal | currency:'USD' }}</strong></div>
+    <ng-container *ngIf="appliedVoucherId">
+      <div class="card-dialog-total voucher-row"><span>Voucher {{ appliedVoucherId }}</span><strong>−{{ voucherCovered | currency:'USD' }}</strong></div>
+      <div class="card-dialog-total card-dialog-grand-total"><span>Amount due on card</span><strong>{{ amountDue | currency:'USD' }}</strong></div>
+    </ng-container>
     <div class="card-dialog-actions">
       <button type="button" class="cancel-transaction" [disabled]="processingPayment || cancellingTransaction"
         (click)="cancelTransaction()">{{ cancellingTransaction ? 'Canceling...' : 'Cancel transaction' }}</button>
       <button type="button" class="complete-payment" [disabled]="!canCompleteSale || processingPayment || cancellingTransaction" (click)="completeSale()">
-        {{ processingPayment ? 'Processing payment...' : 'Pay now' }} <span>{{ bagTotal | currency:'USD' }}</span>
+        {{ processingPayment ? 'Processing payment...' : 'Pay now' }} <span>{{ amountDue | currency:'USD' }}</span>
       </button>
     </div>
   </section>
@@ -1015,7 +1035,8 @@
         <span *ngIf="sale.discountTotal > 0">Category discounts {{ sale.discountTotal | currency:'USD' }} · </span>
         Subtotal {{ sale.subtotal | currency:'USD' }} ·
         Tax {{ sale.taxAmount | currency:'USD' }} ·
-        {{ sale.paymentMethod === 'cash' ? 'Cash' : 'Card (demo)' }}
+        <span *ngIf="sale.voucherAmount > 0">Voucher {{ sale.voucherCode }} {{ sale.voucherAmount | currency:'USD' }} · </span>
+        {{ paymentMethodLabel(sale.paymentMethod) }}
         <span *ngIf="sale.cashReceived !== undefined">
           · Received {{ sale.cashReceived | currency:'USD' }} · Change {{ sale.changeDue | currency:'USD' }}
         </span>
@@ -1058,7 +1079,8 @@
       <div *ngIf="saleReceipt.customerDiscountAmount > 0" class="discount-row"><dt>{{ saleReceipt.customerDiscountLabel }}</dt><dd>−{{ saleReceipt.customerDiscountAmount | currency:'USD' }}</dd></div>
       <div><dt>Tax</dt><dd>{{ saleReceipt.taxAmount | currency:'USD' }}</dd></div>
       <div class="receipt-grand-total"><dt>Total paid</dt><dd>{{ saleReceipt.total | currency:'USD' }}</dd></div>
-      <div><dt>Payment</dt><dd>{{ saleReceipt.paymentMethod === 'cash' ? 'Cash' : 'Card (demo)' }}</dd></div>
+      <div *ngIf="saleReceipt.voucherAmount > 0"><dt>Voucher {{ saleReceipt.voucherCode }}</dt><dd>{{ saleReceipt.voucherAmount | currency:'USD' }}</dd></div>
+      <div><dt>{{ saleReceipt.voucherAmount > 0 && saleReceipt.paymentMethod !== 'voucher' ? 'Remaining paid by' : 'Payment' }}</dt><dd>{{ paymentMethodLabel(saleReceipt.paymentMethod) }}</dd></div>
       <div *ngIf="saleReceipt.cashReceived !== undefined"><dt>Cash received</dt><dd>{{ saleReceipt.cashReceived | currency:'USD' }}</dd></div>
       <div *ngIf="saleReceipt.changeDue !== undefined"><dt>Change</dt><dd>{{ saleReceipt.changeDue | currency:'USD' }}</dd></div>
     </dl>

@@ -8,6 +8,7 @@ from .models import (
     StaffCartItemRemoval,
     StaffCredential,
     StudentId,
+    Voucher,
 )
 from .permissions import is_manager, user_role
 
@@ -51,6 +52,16 @@ class StudentIdAdmin(admin.ModelAdmin):
     list_display = ("student_id", "is_active")
     list_filter = ("is_active",)
     search_fields = ("student_id",)
+
+    def has_add_permission(self, request):
+        return is_manager(request.user)
+
+
+@admin.register(Voucher)
+class VoucherAdmin(admin.ModelAdmin):
+    list_display = ("voucher_id", "balance", "is_active")
+    list_filter = ("is_active",)
+    search_fields = ("voucher_id",)
 
     def has_add_permission(self, request):
         return is_manager(request.user)

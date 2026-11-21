@@ -528,7 +528,7 @@ class DiscountApiTests(APITestCase):
 				response = self.checkout(student_id=student_id)
 
 				self.assertEqual(response.status_code, 400)
-				self.assertEqual(response.data["error"], "Enter a valid student ID.")
+				self.assertEqual(response.data["error"], "Enter a valid student ID or voucher ID.")
 				self.assert_no_sale_and_cart_intact()
 
 				cart_response = self.cart({"student_id": student_id})

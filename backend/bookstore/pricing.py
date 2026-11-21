@@ -2,7 +2,7 @@ from collections import namedtuple
 from decimal import Decimal, ROUND_HALF_UP
 
 from .discounts import calculate_discount
-from .models import StudentId
+from .models import StudentId, Voucher
 from .permissions import user_role
 from .tax import CENT, calculate_amount_tax
 
@@ -11,7 +11,8 @@ CUSTOMER_DISCOUNT_RATES = {
     "student": Decimal("0.10"),
     "employee": Decimal("0.20"),
 }
-INVALID_STUDENT_ID_MESSAGE = "Enter a valid student ID."
+INVALID_STUDENT_ID_MESSAGE = "Enter a valid student ID or voucher ID."
+EMPTY_VOUCHER_MESSAGE = "This voucher has no remaining balance."
 
 # subtotal is after the category discount; the customer discount comes off that.
 LinePrice = namedtuple(
@@ -21,7 +22,27 @@ LinePrice = namedtuple(
 
 
 class InvalidStudentId(Exception):
-    pass
+    def __init__(self, message=INVALID_STUDENT_ID_MESSAGE):
+        super().__init__(message)
+        self.message = message
+
+
+def find_voucher(code, for_update=False):
+    code = str(code or "").strip()
+    if not code:
+        return None
+    vouchers = Voucher.objects.filter(voucher_id=code, is_active=True)
+    if for_update:
+        vouchers = vouchers.select_for_update()
+    return vouchers.first()
+
+
+def voucher_split(voucher, total):
+    total = Decimal(total).quantize(CENT, rounding=ROUND_HALF_UP)
+    if voucher is None:
+        return Decimal("0.00"), total
+    applied = min(voucher.balance, total).quantize(CENT, rounding=ROUND_HALF_UP)
+    return applied, (total - applied).quantize(CENT, rounding=ROUND_HALF_UP)
 
 
 def resolve_customer_discount(user, student_id, use_employee_discount):
@@ -34,9 +55,14 @@ def resolve_customer_discount(user, student_id, use_employee_discount):
 
     student_id = str(student_id or "").strip()
     if student_id:
-        if not StudentId.objects.filter(student_id=student_id, is_active=True).exists():
+        if StudentId.objects.filter(student_id=student_id, is_active=True).exists():
+            return "student"
+        voucher = find_voucher(student_id)
+        if voucher is None:
             raise InvalidStudentId
-        return "student"
+        if voucher.balance <= 0:
+            raise InvalidStudentId(EMPTY_VOUCHER_MESSAGE)
+        return None
 
     return None
 

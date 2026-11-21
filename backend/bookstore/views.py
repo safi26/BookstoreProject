@@ -50,11 +50,12 @@ from .serializers import (
     SaleReceiptSerializer,
 )
 from .pricing import (
-    INVALID_STUDENT_ID_MESSAGE,
     InvalidStudentId,
     customer_discount_percent,
+    find_voucher,
     price_line,
     resolve_customer_discount,
+    voucher_split,
 )
 
 
@@ -96,6 +97,12 @@ def get_staff_authorization_user(request):
 
 def has_staff_authorization(request):
     return get_staff_authorization_user(request) is not None
+
+
+def customer_voucher(user, student_id, customer_discount_type, for_update=False):
+    if customer_discount_type is not None or user_role(user) in {"Manager", "Operator"}:
+        return None
+    return find_voucher(student_id, for_update=for_update)
 
 
 def requires_staff_authorization(request, student_id, use_employee_discount):
@@ -508,9 +515,9 @@ class CartView(APIView):
                 student_id,
                 use_employee_discount,
             )
-        except InvalidStudentId:
+        except InvalidStudentId as error:
             return Response(
-                {"error": INVALID_STUDENT_ID_MESSAGE},
+                {"error": error.message},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
@@ -518,7 +525,14 @@ class CartView(APIView):
 
         serializer = CartSerializer(
             cart,
-            context={"customer_discount_type": customer_discount_type},
+            context={
+                "customer_discount_type": customer_discount_type,
+                "voucher": customer_voucher(
+                    request.user,
+                    student_id,
+                    customer_discount_type,
+                ),
+            },
         )
 
         return Response(serializer.data)
@@ -819,9 +833,9 @@ class CheckoutView(APIView):
     def post(self, request, user_id):
         user = get_object_or_404(User, id=user_id)
         payment_method = request.data.get("payment_method")
-        if payment_method not in {"cash", "card"}:
+        if payment_method not in {"cash", "card", "voucher"}:
             return Response(
-                {"error": "payment_method must be cash or card."},
+                {"error": "payment_method must be cash, card, or voucher."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
@@ -862,9 +876,9 @@ class CheckoutView(APIView):
                 student_id,
                 use_employee_discount,
             )
-        except InvalidStudentId:
+        except InvalidStudentId as error:
             return Response(
-                {"error": INVALID_STUDENT_ID_MESSAGE},
+                {"error": error.message},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
@@ -981,9 +995,42 @@ class CheckoutView(APIView):
                 Decimal("0.00"),
             ).quantize(Decimal("0.01"))
             total = subtotal - customer_discount_amount + tax_amount
-            if payment_method == "cash" and cash_received < total:
+
+            voucher = customer_voucher(
+                request.user,
+                student_id,
+                customer_discount_type,
+                for_update=True,
+            )
+            voucher_amount, amount_due = voucher_split(voucher, total)
+            if voucher is not None and voucher_amount <= 0:
                 return Response(
-                    {"error": "Cash received must cover the cart total."},
+                    {"error": "This voucher has no remaining balance."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            if payment_method == "voucher":
+                if voucher is None:
+                    return Response(
+                        {"error": "Enter a valid voucher ID to pay by voucher."},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+                if amount_due > 0:
+                    return Response(
+                        {
+                            "error": (
+                                f"Voucher balance does not cover the total. Pay the "
+                                f"remaining ${amount_due} by cash or card."
+                            ),
+                            "amount_due": f"{amount_due}",
+                        },
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+            elif voucher is not None and amount_due == 0:
+                payment_method = "voucher"
+                cash_received = None
+            if payment_method == "cash" and cash_received < amount_due:
+                return Response(
+                    {"error": "Cash received must cover the amount due."},
                     status=status.HTTP_400_BAD_REQUEST,
                 )
             sale = Sale.objects.create(
@@ -999,9 +1046,18 @@ class CheckoutView(APIView):
                 customer_discount_amount=customer_discount_amount,
                 tax_amount=tax_amount,
                 total=total,
+                voucher_code=voucher.voucher_id if voucher is not None else "",
+                voucher_amount=voucher_amount,
                 cash_received=cash_received,
-                change_due=(cash_received - total if cash_received is not None else Decimal("0.00")),
+                change_due=(
+                    cash_received - amount_due
+                    if cash_received is not None
+                    else Decimal("0.00")
+                ),
             )
+            if voucher is not None:
+                voucher.balance -= voucher_amount
+                voucher.save(update_fields=["balance"])
             if payment_method == "cash":
                 drawer = self.get_locked_cash_drawer()
                 drawer.balance += cash_received - sale.change_due
